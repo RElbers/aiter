@@ -148,12 +148,6 @@ jobs:
               echo "FFM_TEST=${FFM_TEST}"
               echo "PATH=${PATH}"
               echo "PYTHONPATH=${PYTHONPATH:-}"
-              echo "==== Mounted workspace git info ===="
-              git config --global --add safe.directory /workspace
-              git -C /workspace rev-parse HEAD
-              git -C /workspace branch --show-current || true
-              git -C /workspace log -1 --oneline
-              git -C /workspace status --short --branch
               cd /root/aiter
               echo "aiter root pwd: $(pwd)"
               git config --global --add safe.directory /root/aiter
