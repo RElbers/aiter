@@ -149,6 +149,7 @@ jobs:
               echo "PATH=${PATH}"
               echo "PYTHONPATH=${PYTHONPATH:-}"
               echo "==== Mounted workspace git info ===="
+              git config --global --add safe.directory /workspace
               git -C /workspace rev-parse HEAD
               git -C /workspace branch --show-current || true
               git -C /workspace log -1 --oneline
