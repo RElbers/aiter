@@ -580,6 +580,12 @@ def compile_mxscale_gemm(
     use_fp4_bank_friendly_schedule = (
         compute_schedule_kind == COMPUTE_SCHEDULE_FP4_COL_BAND
     )
+    # Disable the LDS->VGPR fragment prefetch-ahead (partial drain) for GUGU:
+    # each K-subtile loads its fragments then computes immediately, so only the
+    # current subtile's B/scale fragments are live (lower VGPR), at the cost of
+    # exposing ds_load latency. Enabled whenever this is the gugu (interleaved)
+    # path; non-gugu paths keep the drain.
+    gugu_use_no_drain = stage1_act_interleave
     needs_grouped_row_masked_store = grouped_masked_m and (M % tile_m != 0)
     kernel_tag_mode = str(kernel_tag).replace("-", "_")
     # Kernel symbol carries the data format + tile shape so profiles/dumps can
@@ -1321,6 +1327,28 @@ def compile_mxscale_gemm(
                         emit_filler=emit_filler,
                         mid_compute_callback=mid_compute_callback,
                     )
+                elif const_expr(gugu_use_no_drain):
+                    # No fragment drain: load + compute each K-subtile in turn,
+                    # no prefetch-ahead -> only current subtile's fragments live.
+                    for ks in range_constexpr(k_wmma_steps):
+                        _b, _bs, _as = _load_b_and_scales(
+                            b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, ks
+                        )
+                        current_accs = _a_streaming_compute(
+                            current_accs,
+                            a_buf,
+                            a_bases,
+                            _b,
+                            _bs,
+                            _as,
+                            ks,
+                            emit_filler=(
+                                emit_filler if ks == k_wmma_steps - 1 else None
+                            ),
+                            mid_compute_callback=(
+                                mid_compute_callback if ks == 0 else None
+                            ),
+                        )
                 else:
                     prev_b, prev_bs, prev_as = _load_b_and_scales(
                         b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, 0
