@@ -151,12 +151,8 @@ jobs:
               cd /root/aiter
               echo "aiter root pwd: $(pwd)"
               git config --global --add safe.directory /root/aiter
-              rm -rf "${FFM_TEST}"
-              mkdir -p "$(dirname "${FFM_TEST}")"
-              cp -a "/workspace/${FFM_TEST}" "${FFM_TEST}"
-              echo "==== Copied test suite info ===="
+              echo "==== Image test suite info ===="
               find "${FFM_TEST}" -type f -name "test*.py" | wc -l
-              git status --short -- "${FFM_TEST}" || true
               export ENABLE_CK=0
               echo "ENABLE_CK=${ENABLE_CK}"
               python3 -m pip show amd-aiter
