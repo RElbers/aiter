@@ -586,6 +586,10 @@ def compile_mxscale_gemm(
     # exposing ds_load latency. Enabled whenever this is the gugu (interleaved)
     # path; non-gugu paths keep the drain.
     gugu_use_no_drain = stage1_act_interleave
+    # GUGU two-pass over N: run the interleaved compute as two N-halves so peak
+    # fragment registers ~ gguu's dual-chain (kept the GUGU epilogue). Requires
+    # an even wmma_n_rep to split. Applies to gugu regardless of wst.
+    gugu_two_pass = stage1_act_interleave and (wmma_n_rep % 2 == 0)
     needs_grouped_row_masked_store = grouped_masked_m and (M % tile_m != 0)
     kernel_tag_mode = str(kernel_tag).replace("-", "_")
     # Kernel symbol carries the data format + tile shape so profiles/dumps can
@@ -1146,11 +1150,21 @@ def compile_mxscale_gemm(
                 return results
 
             def _load_b_and_scales(
-                b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, ks
+                b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, ks,
+                wn_lo=0, wn_hi=None,
             ):
-                """Load B frags + all scales for one K-subtile."""
+                """Load B frags + all scales for one K-subtile.
+
+                wn_lo/wn_hi restrict the B-fragment load to N-subtiles
+                [wn_lo,wn_hi) (GUGU two-pass keeps only half the B-frags live);
+                entries outside the range are None. Scales are loaded whole so
+                their indexing stays absolute.
+                """
+                _hi = wmma_n_rep if wn_hi is None else wn_hi
                 b_frags = [
                     load_b_frag(b_buf, b_bases, wn, ks)
+                    if (wn_lo <= wn and wn < _hi)
+                    else None
                     for wn in range_constexpr(wmma_n_rep)
                 ]
                 _n_units = wmma_n_rep // 2 if b_opsel_on else wmma_n_rep
@@ -1216,13 +1230,26 @@ def compile_mxscale_gemm(
                 emit_filler=None,
                 next_bs_info=None,
                 mid_compute_callback=None,
+                wn_lo=0,
+                wn_hi=None,
             ):
                 """Half-based A-streaming with zigzag wn ordering.
 
                 When *next_bs_info* is provided, the next K-subtile's B+scale
                 loads are issued BEFORE the s_wait_dscnt so they overlap with
                 the current WMMA execution (partial drain pattern).
+
+                wn_lo/wn_hi restrict WMMA emission (and the next-subtile B
+                prefetch) to N-subtiles [wn_lo,wn_hi); the partial-drain
+                s_wait_dscnt count is scaled to that span (scales loaded whole).
                 """
+                _hi = wmma_n_rep if wn_hi is None else wn_hi
+                _nspan = _hi - wn_lo
+                _bs_ds = (
+                    _nspan * _b_frag_loads_per_wn
+                    + _b_scale_ds_loads_full
+                    + (wmma_m_rep + 3) // 4
+                )
                 next_result = None
                 _front_wm = (wmma_m_rep + 1) // 2
                 _back_wm = wmma_m_rep - _front_wm
@@ -1234,8 +1261,14 @@ def compile_mxscale_gemm(
                         if const_expr(is_last and emit_filler is not None):
                             rocdl.sched_barrier(0)
                             emit_filler()
-                        for wn_raw in range_constexpr(wmma_n_rep):
-                            wn = (wmma_n_rep - 1 - wn_raw) if (wm % 2 == 1) else wn_raw
+                        _wns = [
+                            wn
+                            for wn in range_constexpr(wmma_n_rep)
+                            if (wn_lo <= wn and wn < _hi)
+                        ]
+                        if const_expr(wm % 2 == 1):
+                            _wns = _wns[::-1]
+                        for wn in _wns:
                             _emit_wmma(
                                 accs,
                                 wm,
@@ -1253,7 +1286,7 @@ def compile_mxscale_gemm(
                 ]
 
                 _use_partial_drain = (
-                    next_bs_info is not None and _front_wm * wmma_n_rep >= 4
+                    next_bs_info is not None and _front_wm * _nspan >= 4
                 )
 
                 if const_expr(_use_partial_drain):
@@ -1261,9 +1294,10 @@ def compile_mxscale_gemm(
                         next_bs_info
                     )
                     next_result = _load_b_and_scales(
-                        nb_buf, nb_bases, nbs_buf, nbs_bases, nas_buf, nas_bases, n_ks
+                        nb_buf, nb_bases, nbs_buf, nbs_bases, nas_buf, nas_bases, n_ks,
+                        wn_lo=wn_lo, wn_hi=_hi,
                     )
-                    rocdl.s_wait_dscnt(_bs_ds_loads)
+                    rocdl.s_wait_dscnt(_bs_ds)
                 else:
                     rocdl.s_wait_dscnt(0)
 
@@ -1278,7 +1312,7 @@ def compile_mxscale_gemm(
                         load_a_frag(a_buf, a_bases[_front_wm + h], ks)
                         for h in range_constexpr(_back_wm)
                     ]
-                    _back_drain = _bs_ds_loads if _use_partial_drain else 0
+                    _back_drain = _bs_ds if _use_partial_drain else 0
                     rocdl.s_wait_dscnt(_back_drain)
                     _emit_rows(_front_wm, a_frags_back)
 
@@ -1289,7 +1323,8 @@ def compile_mxscale_gemm(
                         next_bs_info
                     )
                     next_result = _load_b_and_scales(
-                        nb_buf, nb_bases, nbs_buf, nbs_bases, nas_buf, nas_bases, n_ks
+                        nb_buf, nb_bases, nbs_buf, nbs_bases, nas_buf, nas_bases, n_ks,
+                        wn_lo=wn_lo, wn_hi=_hi,
                     )
                     return accs, next_result
                 return accs
@@ -1303,6 +1338,8 @@ def compile_mxscale_gemm(
                 lds_bs,
                 emit_filler=None,
                 mid_compute_callback=None,
+                wn_lo=0,
+                wn_hi=None,
             ):
                 current_accs = list(accs_in)
                 a_buf, a_bases = _precompute_a_lane_bases(lds_a)
@@ -1314,7 +1351,8 @@ def compile_mxscale_gemm(
 
                 if const_expr(k_wmma_steps == 1):
                     b_frags, b_scales, a_scales = _load_b_and_scales(
-                        b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, 0
+                        b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, 0,
+                        wn_lo=wn_lo, wn_hi=wn_hi,
                     )
                     current_accs = _a_streaming_compute(
                         current_accs,
@@ -1326,13 +1364,16 @@ def compile_mxscale_gemm(
                         0,
                         emit_filler=emit_filler,
                         mid_compute_callback=mid_compute_callback,
+                        wn_lo=wn_lo,
+                        wn_hi=wn_hi,
                     )
                 elif const_expr(gugu_use_no_drain):
                     # No fragment drain: load + compute each K-subtile in turn,
                     # no prefetch-ahead -> only current subtile's fragments live.
                     for ks in range_constexpr(k_wmma_steps):
                         _b, _bs, _as = _load_b_and_scales(
-                            b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, ks
+                            b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, ks,
+                            wn_lo=wn_lo, wn_hi=wn_hi,
                         )
                         current_accs = _a_streaming_compute(
                             current_accs,
@@ -1348,10 +1389,13 @@ def compile_mxscale_gemm(
                             mid_compute_callback=(
                                 mid_compute_callback if ks == 0 else None
                             ),
+                            wn_lo=wn_lo,
+                            wn_hi=wn_hi,
                         )
                 else:
                     prev_b, prev_bs, prev_as = _load_b_and_scales(
-                        b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, 0
+                        b_buf, b_bases, bs_buf, bs_bases, as_buf, as_bases, 0,
+                        wn_lo=wn_lo, wn_hi=wn_hi,
                     )
                     for ks in range_constexpr(k_wmma_steps - 1):
                         _mid_cb = mid_compute_callback if ks == 0 else None
@@ -1373,6 +1417,8 @@ def compile_mxscale_gemm(
                                 ks + 1,
                             ),
                             mid_compute_callback=_mid_cb,
+                            wn_lo=wn_lo,
+                            wn_hi=wn_hi,
                         )
                     current_accs = _a_streaming_compute(
                         current_accs,
@@ -1383,8 +1429,47 @@ def compile_mxscale_gemm(
                         prev_as,
                         k_wmma_steps - 1,
                         emit_filler=emit_filler,
+                        wn_lo=wn_lo,
+                        wn_hi=wn_hi,
                     )
                 return current_accs
+
+            def compute_gugu_two_pass(
+                accs_in,
+                lds_a,
+                lds_b,
+                lds_as,
+                lds_bs,
+                emit_filler=None,
+                mid_compute_callback=None,
+            ):
+                # GUGU two-pass over N: run compute_tile twice over the two
+                # N-halves into the SAME interleaved accumulator, so only half
+                # the B-fragments are live per pass (peak fragment registers ~
+                # gguu's dual-chain), while keeping the GUGU interleaved-acc +
+                # de-interleave epilogue. Reuses compute_tile's full pipeline.
+                _half = wmma_n_rep // 2
+                accs = compute_tile(
+                    accs_in,
+                    lds_a,
+                    lds_b,
+                    lds_as,
+                    lds_bs,
+                    mid_compute_callback=mid_compute_callback,
+                    wn_lo=0,
+                    wn_hi=_half,
+                )
+                accs = compute_tile(
+                    accs,
+                    lds_a,
+                    lds_b,
+                    lds_as,
+                    lds_bs,
+                    emit_filler=emit_filler,
+                    wn_lo=_half,
+                    wn_hi=wmma_n_rep,
+                )
+                return accs
 
             def compute_tile_fp4_bank_friendly(
                 accs_in,
@@ -1625,6 +1710,16 @@ def compile_mxscale_gemm(
                 emit_filler=None,
                 mid_compute_callback=None,
             ):
+                if const_expr(gugu_two_pass):
+                    return compute_gugu_two_pass(
+                        accs_in,
+                        lds_a,
+                        lds_b,
+                        lds_as,
+                        lds_bs,
+                        emit_filler=emit_filler,
+                        mid_compute_callback=mid_compute_callback,
+                    )
                 if const_expr(compute_schedule_kind == COMPUTE_SCHEDULE_FP4_COL_BAND):
                     return compute_tile_fp4_bank_friendly(
                         accs_in,
