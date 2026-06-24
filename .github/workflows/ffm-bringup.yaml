@@ -169,7 +169,8 @@ jobs:
               echo "==== Check Aiter core module ===="
               python3 -c "from pathlib import Path; import aiter; aiter_dir = Path(aiter.__file__).resolve().parent; jit_dir = aiter_dir / \"jit\"; print(f\"aiter module: {aiter.__file__}\"); print(f\"aiter dir: {aiter_dir}\"); core_modules = sorted(jit_dir.glob(\"**/*core*.so\")); print(f\"FOUND {len(core_modules)} core module(s):\" if core_modules else f\"NOT FOUND: no *core*.so under {jit_dir}\"); [print(path) for path in core_modules]"
               python3 -c "import aiter; print(f\"aiter module: {aiter.__file__}\")"
-              PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -v "${FFM_TEST}"
+              python3 -m pip uninstall -y pylama || true
+              python3 -m pytest -v "${FFM_TEST}"
             '
 
       - name: Cleanup
