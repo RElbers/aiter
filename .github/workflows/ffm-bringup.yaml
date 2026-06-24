@@ -143,10 +143,11 @@ jobs:
             bash -lc '
               set -euo pipefail
               source /ffm/ffmlite_env.sh
-              rm -rf /tmp/ffm-tests
-              mkdir -p /tmp/ffm-tests
-              cp -a /workspace/op_tests /tmp/ffm-tests/op_tests
-              cd /tmp/ffm-tests
+              cd /root/aiter
+              git config --global --add safe.directory /root/aiter
+              rm -rf "${FFM_TEST}"
+              mkdir -p "$(dirname "${FFM_TEST}")"
+              cp -a "/workspace/${FFM_TEST}" "${FFM_TEST}"
               export ENABLE_CK=0
               python3 -m pip show amd-aiter
               echo "==== Check FFM image Aiter git version ===="
