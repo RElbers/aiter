@@ -143,12 +143,31 @@ jobs:
             bash -lc '
               set -euo pipefail
               source /ffm/ffmlite_env.sh
+              echo "==== Runtime context ===="
+              echo "initial pwd: $(pwd)"
+              echo "FFM_TEST=${FFM_TEST}"
+              echo "PATH=${PATH}"
+              echo "PYTHONPATH=${PYTHONPATH:-}"
+              echo "==== Mounted workspace git info ===="
+              git -C /workspace rev-parse HEAD
+              git -C /workspace branch --show-current || true
+              git -C /workspace log -1 --oneline
+              git -C /workspace status --short --branch
               cd /root/aiter
+              echo "aiter root pwd: $(pwd)"
               git config --global --add safe.directory /root/aiter
               rm -rf "${FFM_TEST}"
               mkdir -p "$(dirname "${FFM_TEST}")"
               cp -a "/workspace/${FFM_TEST}" "${FFM_TEST}"
+              echo "==== Copied test suite info ===="
+              find "${FFM_TEST}" -type f -name "test*.py" | wc -l
+              git status --short -- "${FFM_TEST}" || true
               export ENABLE_CK=0
+              echo "ENABLE_CK=${ENABLE_CK}"
+              echo "==== Python info ===="
+              which python3
+              python3 --version
+              python3 -c "import sys; print('sys.executable:', sys.executable); print('sys.path:', sys.path)"
               python3 -m pip show amd-aiter
               echo "==== Check FFM image Aiter git version ===="
               if [ -d /root/aiter/.git ]; then
