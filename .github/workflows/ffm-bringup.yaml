@@ -1,6 +1,6 @@
 name: FFM Aiter UT
 
-run-name: FFM aiter UT on ${{ inputs.runner || 'linux-aiter-mi35x-1' }}
+run-name: FFM aiter UT on ${{ inputs.runner || 'aiter-1gpu-runner' }}
 
 on:
   pull_request:
@@ -15,7 +15,7 @@ on:
       runner:
         description: Self-hosted MI350 runner label to use for the FFM UT.
         required: true
-        default: linux-aiter-mi35x-1
+        default: aiter-1gpu-runner
         type: string
       docker_image:
         description: FFM image to pull and test.
@@ -32,7 +32,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner || 'linux-aiter-mi35x-1' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner || 'aiter-1gpu-runner' }}
   cancel-in-progress: true
 
 env:
@@ -54,10 +54,10 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
 
   ffm-aiter-ut:
-    name: FFM Aiter UT (${{ inputs.runner || 'linux-aiter-mi35x-1' }})
+    name: FFM Aiter UT (${{ inputs.runner || 'aiter-1gpu-runner' }})
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     needs: [check-signal]
-    runs-on: ${{ inputs.runner || 'linux-aiter-mi35x-1' }}
+    runs-on: ${{ inputs.runner || 'aiter-1gpu-runner' }}
     timeout-minutes: 180
 
     steps:
