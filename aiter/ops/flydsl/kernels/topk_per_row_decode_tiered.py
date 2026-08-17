@@ -422,52 +422,50 @@ def create_topk_per_row_decode_tiered_kernel(
 
         def choose_bucket_prefix(target_k):
             # Multi-block ascending block scan over the LDS histogram; each thread owns a bin pair.
-            first_bin = tid * 2
-            bin0_valid = first_bin < num_buckets
-            bin1 = first_bin + 1
-            bin1_valid = bin1 < num_buckets
-            safe0 = bin0_valid.select(first_bin, 0)
-            safe1 = bin1_valid.select(bin1, 0)
-            c0 = bin0_valid.select(fx.memref_load(s_hist, safe0), 0)
-            c1 = bin1_valid.select(fx.memref_load(s_hist, safe1), 0)
-            local_total = c0 + c1
+            prefix_base = waves_per_block
 
-            wave_incl = wave_inclusive_scan_i32(local_total)
-            wave_excl_thread = wave_incl - local_total
+            bin0 = tid * 2
+            bin1 = bin0 + 1
+
+            bin0_valid = bin0 < num_buckets
+            bin1_valid = bin1 < num_buckets
+            safe_bin0 = bin0_valid.select(bin0, 0)
+            safe_bin1 = bin1_valid.select(bin1, 0)
+            count0 = bin0_valid.select(fx.memref_load(s_hist, safe_bin0), 0)
+            count1 = bin1_valid.select(fx.memref_load(s_hist, safe_bin1), 0)
+
+            pair_count = count0 + count1
+            thread_incl = wave_inclusive_scan_i32(pair_count)
+            thread_prefix = thread_incl - pair_count
 
             if lane == (WARP_SIZE - 1):
-                fx.memref_store(wave_incl, s_scan, wave)
+                fx.memref_store(thread_incl, s_scan, wave)
             gpu.barrier()
 
             if wave == 0:
-                in16 = lane < waves_per_block
-                lane_safe = in16.select(lane, 0)
-                wtot = in16.select(fx.memref_load(s_scan, lane_safe), 0)
-                wincl = wave_inclusive_scan_i32(wtot)
-                wexcl = wincl - wtot
-                if in16:
-                    fx.memref_store(wexcl, s_scan, lane + waves_per_block)
+                has_slot = lane < waves_per_block
+                slot_index = has_slot.select(lane, 0)
+                slot_total = has_slot.select(fx.memref_load(s_scan, slot_index), 0)
+                slot_prefix = wave_inclusive_scan_i32(slot_total) - slot_total
+                if has_slot:
+                    fx.memref_store(slot_prefix, s_scan, prefix_base + lane)
             gpu.barrier()
 
-            wave_off = fx.memref_load(s_scan, wave + waves_per_block)
-            excl0 = wave_off + wave_excl_thread
-            incl0 = excl0 + c0
-            incl1 = incl0 + c1
+            wave_prefix = fx.memref_load(s_scan, prefix_base + wave)
+            excl0 = wave_prefix + thread_prefix
+            incl0 = excl0 + count0
+            incl1 = incl0 + count1
 
-            def emit_find(bucket, excl, incl, count):
-                crosses = (excl < target_k) & (incl >= target_k)
-                if crosses:
-                    fx.memref_store(
-                        target_k - excl,
-                        s_meta,
-                        SMEM_META_K,
-                    )
-                    fx.memref_store(count, s_meta, SMEM_META_LEN)
-                    fx.memref_store(bucket, s_meta, SMEM_META_THRESHOLD)
+            def mark_threshold(bin_index, excl, incl, bucket_count):
+                is_threshold = (excl < target_k) & (incl >= target_k)
+                if is_threshold:
+                    fx.memref_store(target_k - excl, s_meta, SMEM_META_K)
+                    fx.memref_store(bucket_count, s_meta, SMEM_META_LEN)
+                    fx.memref_store(bin_index, s_meta, SMEM_META_THRESHOLD)
                     fx.memref_store(excl, s_meta, SMEM_META_ABOVE)
 
-            emit_find(first_bin, excl0, incl0, c0)
-            emit_find(bin1, incl0, incl1, c1)
+            mark_threshold(bin0, excl0, incl0, count0)
+            mark_threshold(bin1, incl0, incl1, count1)
             gpu.barrier()
 
         def flush_local_histogram(pass_id: int):
@@ -716,49 +714,51 @@ def create_topk_per_row_decode_tiered_kernel(
                 # each thread owns the contiguous bin pair (2*tid, 2*tid+1). The
                 # kth-largest boundary is the first bucket whose inclusive prefix
                 # passes ``K' = total - target_k`` (excl <= K' < incl).
-                two_tid = tid * 2
-                c0 = fx.memref_load(s_hist, two_tid)
-                c1 = fx.memref_load(s_hist, two_tid + 1)
-                local_total = c0 + c1
+                prefix_base = waves_per_block
 
-                wave_incl = wave_inclusive_scan_i32(local_total)
-                wave_excl_thread = wave_incl - local_total
+                bin0 = tid * 2
+                count0 = fx.memref_load(s_hist, bin0)
+                count1 = fx.memref_load(s_hist, bin0 + 1)
+
+                pair_count = count0 + count1
+                thread_incl = wave_inclusive_scan_i32(pair_count)
+                thread_prefix = thread_incl - pair_count
 
                 if lane == (WARP_SIZE - 1):
-                    fx.memref_store(wave_incl, s_scan, wave)
+                    fx.memref_store(thread_incl, s_scan, wave)
                 gpu.barrier()
 
                 if wave == 0:
-                    in16 = lane < waves_per_block
-                    lane_safe = in16.select(lane, 0)
-                    wtot = in16.select(fx.memref_load(s_scan, lane_safe), 0)
-                    wincl = wave_inclusive_scan_i32(wtot)
-                    wexcl = wincl - wtot
-                    if in16:
-                        fx.memref_store(wexcl, s_scan, lane + waves_per_block)
+                    has_slot = lane < waves_per_block
+                    slot_index = has_slot.select(lane, 0)
+                    slot_total = has_slot.select(fx.memref_load(s_scan, slot_index), 0)
+                    slot_prefix = wave_inclusive_scan_i32(slot_total) - slot_total
+                    if has_slot:
+                        fx.memref_store(slot_prefix, s_scan, prefix_base + lane)
                 gpu.barrier()
 
-                wave_off = fx.memref_load(s_scan, wave + waves_per_block)
-                last_off = fx.memref_load(
-                    s_scan, (waves_per_block - 1) + waves_per_block
+                wave_prefix = fx.memref_load(s_scan, prefix_base + wave)
+                last_wave_prefix = fx.memref_load(
+                    s_scan, prefix_base + waves_per_block - 1
                 )
-                last_tot = fx.memref_load(s_scan, waves_per_block - 1)
-                total = last_off + last_tot
-                kprime = total - target_k
+                last_wave_total = fx.memref_load(s_scan, waves_per_block - 1)
+                total = last_wave_prefix + last_wave_total
+                below_target = total - target_k
 
-                excl0 = wave_off + wave_excl_thread
-                incl0 = excl0 + c0
-                incl1 = incl0 + c1
+                excl0 = wave_prefix + thread_prefix
+                incl0 = excl0 + count0
+                incl1 = incl0 + count1
 
-                def emit_find(b, excl, incl):
-                    crosses = (excl <= kprime) & (incl > kprime)
-                    if crosses:
-                        fx.memref_store(b, s_meta, threshold_slot)
+                def mark_threshold(bin_index, excl, incl):
+                    is_threshold = (excl <= below_target) & (incl > below_target)
+                    if is_threshold:
+                        fx.memref_store(bin_index, s_meta, threshold_slot)
                         fx.memref_store(total - incl, s_meta, above_slot)
 
-                emit_find(two_tid, excl0, incl0)
-                emit_find(two_tid + 1, incl0, incl1)
+                mark_threshold(bin0, excl0, incl0)
+                mark_threshold(bin0 + 1, incl0, incl1)
                 gpu.barrier()
+
                 return fx.memref_load(s_meta, threshold_slot)
 
             if tid == 0:
