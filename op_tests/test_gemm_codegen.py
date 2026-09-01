@@ -59,6 +59,7 @@ REPRO_BPRESHUFFLE_CSV = os.path.join(
 TARGET_A = ("gfx942", 304)  # MI300X
 TARGET_B = ("gfx950", 256)  # MI350
 TARGET_C = ("gfx942", 80)  # MI308X — gfx942 with CU_NUM override
+TARGET_D = ("gfx950", 128)  # MI350P - gfx950 at half the SPX CU count
 
 # ---------------------------------------------------------------------------
 # Minimal test harness (no external test framework required)
@@ -81,7 +82,7 @@ def _check(name: str, condition: bool, detail: str = "") -> None:
 
 
 def _section(title: str) -> None:
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {title}")
     print("=" * 60)
 
@@ -96,6 +97,7 @@ def test_get_build_targets():
 
     orig_archs = os.environ.pop("GPU_ARCHS", None)
     orig_cu = os.environ.pop("CU_NUM", None)
+    orig_targets = os.environ.pop("AITER_GPU_TARGETS", None)
 
     try:
         # 1.1 Single known arch
@@ -152,8 +154,38 @@ def test_get_build_targets():
             "gfx942" in GFX_CU_NUM_MAP and "gfx950" in GFX_CU_NUM_MAP,
         )
 
-        # 1.8 Live GPU fallback — requires torch and a GPU; skipped otherwise
+        # 1.8 AITER_GPU_TARGETS: two CU counts of one arch, which GPU_ARCHS
+        # plus a single global CU_NUM cannot express.
         del os.environ["GPU_ARCHS"]
+        targets_env = f"{TARGET_B[0]}:{TARGET_B[1]};{TARGET_D[0]}:{TARGET_D[1]}"
+        os.environ["AITER_GPU_TARGETS"] = targets_env
+        t = get_build_targets_env()
+        _check(
+            f"AITER_GPU_TARGETS={targets_env} → two targets same gfx",
+            t == [TARGET_B, TARGET_D],
+            str(t),
+        )
+
+        # 1.9 Bare entry falls back to the GFX_CU_NUM_MAP default
+        os.environ["AITER_GPU_TARGETS"] = TARGET_B[0]
+        t = get_build_targets_env()
+        _check(
+            f"AITER_GPU_TARGETS={TARGET_B[0]} → [{TARGET_B}]", t == [TARGET_B], str(t)
+        )
+
+        # 1.10 Wins over a conflicting GPU_ARCHS + CU_NUM
+        os.environ["GPU_ARCHS"] = TARGET_A[0]
+        os.environ["CU_NUM"] = str(TARGET_C[1])
+        os.environ["AITER_GPU_TARGETS"] = f"{TARGET_D[0]}:{TARGET_D[1]}"
+        t = get_build_targets_env()
+        _check(
+            "AITER_GPU_TARGETS wins over GPU_ARCHS + CU_NUM", t == [TARGET_D], str(t)
+        )
+        del os.environ["GPU_ARCHS"]
+        del os.environ["CU_NUM"]
+        del os.environ["AITER_GPU_TARGETS"]
+
+        # 1.11 Live GPU fallback — requires torch and a GPU; skipped otherwise
         try:
             from aiter.jit.utils.chip_info import get_build_targets
 
@@ -177,6 +209,10 @@ def test_get_build_targets():
             os.environ["CU_NUM"] = orig_cu
         elif "CU_NUM" in os.environ:
             del os.environ["CU_NUM"]
+        if orig_targets is not None:
+            os.environ["AITER_GPU_TARGETS"] = orig_targets
+        elif "AITER_GPU_TARGETS" in os.environ:
+            del os.environ["AITER_GPU_TARGETS"]
 
 
 # ---------------------------------------------------------------------------
@@ -941,7 +977,7 @@ if __name__ == "__main__":
     test_blockscale_kernel_name_forwarding()
     test_build_tune_dict_strict_unknown_kernel()
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Results: {_passed} passed, {_failed} failed")
     print("=" * 60)
     sys.exit(0 if _failed == 0 else 1)

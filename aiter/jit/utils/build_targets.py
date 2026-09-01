@@ -59,17 +59,69 @@ def _parse_gpu_archs_env(gfx_env: str) -> list[str]:
     return archs
 
 
-def get_build_targets_env() -> list[tuple[str, int]]:
-    """Resolve build targets from GPU_ARCHS env var only.  No live GPU detection.
+def _parse_gpu_targets_env() -> list[tuple[str, int]] | None:
+    """Parse AITER_GPU_TARGETS into (gfx, cu_num) targets, or None if it is unset.
 
-    Raises RuntimeError if GPU_ARCHS is not set or contains an unknown arch.
+    gfx950:128;gfx950:256  -> [("gfx950", 128), ("gfx950", 256)]
+    gfx950                 -> [("gfx950", 256)]  # CU from GFX_CU_NUM_MAP
+    gfx942;gfx950:128      -> [("gfx942", 304), ("gfx950", 128)]
+    (unset or blank)       -> None
+    """
+    targets_env = os.getenv("AITER_GPU_TARGETS")
+    if not targets_env or not targets_env.strip():
+        return None
+
+    targets = []
+    for entry in targets_env.split(";"):
+        gfx, _, cu = entry.strip().partition(":")
+        if not gfx:
+            continue
+
+        if cu:
+            targets.append((gfx, int(cu)))
+        elif gfx in GFX_CU_NUM_MAP:
+            targets.append((gfx, GFX_CU_NUM_MAP[gfx]))
+        else:
+            raise RuntimeError(
+                f"Unknown gfx '{gfx}' in AITER_GPU_TARGETS - add it to "
+                f"GFX_CU_NUM_MAP in build_targets.py, or name its CU count "
+                f"explicitly as '{gfx}:<cu_num>'."
+            )
+
+    if not targets:
+        raise RuntimeError(
+            f"AITER_GPU_TARGETS={targets_env!r} names no targets. Expected "
+            f"entries of the form 'gfx' or 'gfx:cu_num'."
+        )
+
+    return targets
+
+
+def get_build_targets_env() -> list[tuple[str, int]]:
+    """Resolve build targets from env only.  No live GPU detection.
+
+    Use AITER_GPU_TARGETS to pick which tuned (gfx, cu_num) kernels get built.
+    Use GPU_ARCHS to pick which archs get compiled: it also feeds --offload-arch
+    and the hsaco cache path, so it stays a bare arch list.
+    If set, AITER_GPU_TARGETS overrides GPU_ARCHS + CU_NUM for resolving build
+    targets.
+
+    Raises RuntimeError if neither is set or an arch is unknown.
     Intended for CI nodes, build scripts, and tests that run without a GPU.
     Use chip_info.get_build_targets() when live GPU fallback is also desired.
+
+    AITER_GPU_TARGETS=gfx950:128;gfx950:256 -> [("gfx950", 128), ("gfx950", 256)]
+    GPU_ARCHS=gfx942;gfx950                 -> [("gfx942", 304), ("gfx950", 256)]
+    GPU_ARCHS=gfx942 CU_NUM=80              -> [("gfx942", 80)]
     """
+    targets = _parse_gpu_targets_env()
+    if targets is not None:
+        return targets
+
     gfx_env = os.getenv("GPU_ARCHS")
     if not gfx_env:
         raise RuntimeError(
-            "GPU_ARCHS is not set. "
+            "Neither AITER_GPU_TARGETS nor GPU_ARCHS is set. "
             "Set GPU_ARCHS=gfx942 (or similar) to resolve build targets without a GPU."
         )
     targets = []

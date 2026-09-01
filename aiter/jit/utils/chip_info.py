@@ -9,6 +9,7 @@ import subprocess
 from build_targets import (
     GFX_MAP,
     _parse_gpu_archs_env,
+    _parse_gpu_targets_env,
     filter_tune_df,
     get_build_targets_env,
 )
@@ -174,13 +175,19 @@ def get_build_targets() -> list[tuple[str, int]]:
     to exactly the right set of kernels for the target GPU(s).
 
     Priority:
-      1. GPU_ARCHS set to an explicit non-empty target list -> delegate to
+      1. AITER_GPU_TARGETS set -> delegate to get_build_targets_env(), which
+         reads it as (gfx, cu_num) pairs.
+      2. GPU_ARCHS set to an explicit non-empty target list -> delegate to
          get_build_targets_env() (no GPU needed).
-      2. GPU_ARCHS unset, empty/whitespace, or "native" -> call get_gfx()
+      3. GPU_ARCHS unset, empty/whitespace, or "native" -> call get_gfx()
          (GPU_ARCHS-aware; falls back to rocminfo when GPU_ARCHS is unset) and
          get_cu_num(), which correctly reflect partition mode and binned variants.
-      3. Neither -> raise RuntimeError with a clear message.
+      4. Neither -> raise RuntimeError with a clear message.
     """
+    targets = _parse_gpu_targets_env()
+    if targets is not None:
+        return targets
+
     gpu_archs = os.getenv("GPU_ARCHS")
     gpu_archs_normalized = gpu_archs.strip() if gpu_archs is not None else ""
     if gpu_archs_normalized and gpu_archs_normalized.lower() != "native":

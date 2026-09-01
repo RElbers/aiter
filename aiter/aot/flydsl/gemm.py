@@ -702,15 +702,22 @@ def main():
     cache_dir = os.path.expanduser(
         os.environ.get("FLYDSL_RUNTIME_CACHE_DIR", "~/.flydsl/cache")
     )
-    arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
+    arch = (
+        os.environ.get("AITER_GPU_TARGETS")
+        or os.environ.get("ARCH")
+        or os.environ.get("GPU_ARCHS")
+    )
 
     all_jobs = collect_aot_jobs(csv_paths, parse_csv)
     if arch:
-        # GPU_ARCHS may be a ';'- or ','-separated list (e.g. "gfx942;gfx950").
+        # ';'- or ','-separated, each entry 'gfx' (any cu_num of that arch) or 'gfx:cu_num'.
         arch_set = {a.strip() for a in re.split(r"[;,]", arch) if a.strip()}
         n_before = len(all_jobs)
         all_jobs = [
-            j for j in all_jobs if job_arch(j["cu_num"], j.get("gfx", "")) in arch_set
+            j
+            for j in all_jobs
+            if job_arch(j["cu_num"], j.get("gfx", "")) in arch_set
+            or f"{job_arch(j['cu_num'], j.get('gfx', ''))}:{j['cu_num']}" in arch_set
         ]
         print(f"[aiter] ARCH={arch}: {len(all_jobs)}/{n_before} jobs match")
 
