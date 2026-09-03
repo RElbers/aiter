@@ -8,7 +8,6 @@ import shutil
 from pathlib import Path
 
 import pandas as pd
-import torch
 from codegen import gen_instances_gfx942 as _gfx942  # noqa: F401
 
 # Import for side-effect: each arch module self-registers into EMIT_REGISTRY
@@ -1327,27 +1326,32 @@ def get_tune_dict(tune_dict_csv):
     default_kernels_dict are passed through untouched -- gen_lookup_dict
     skips them via the `isinstance(mnk, tuple) and mnk[0] > 0` guard.
     """
-    tune_dict = default_kernels_dict
+    tune_dict = dict(default_kernels_dict)
     if os.path.exists(tune_dict_csv):
         tune_df = pd.read_csv(tune_dict_csv)
-        cu_num = None
+        # Filter to the (gfx, cu_num) pairs this build targets, not to the build
+        # host. A build may legitimately bake for more than one SKU of an arch
+        # (AITER_GPU_TARGETS=gfx950:128;gfx950:256), and may target hardware the
+        # builder does not have. get_build_targets() falls back to the live GPU
+        # when no target is named, which is the previous behaviour.
+        targets = None
         try:
-            if torch.cuda.is_available():
-                gpu = torch.cuda.current_device()
-                cu_num = torch.cuda.get_device_properties(gpu).multi_processor_count
-        except Exception:  # noqa: BLE001
-            # torch device enumeration is broken on some ROCm nightlies
-            # (device_count()==0 / "Invalid device id"); use rocminfo instead.
-            cu_num = None
-        if cu_num is None:
-            try:
-                from aiter.jit.utils.chip_info import get_cu_num as _rocminfo_cu_num
+            from aiter.jit.utils.chip_info import get_build_targets
 
-                cu_num = _rocminfo_cu_num()
-            except Exception:  # noqa: BLE001
-                cu_num = None
-        if cu_num is not None:
-            tune_df = tune_df[tune_df["cu_num"] == cu_num].reset_index()
+            targets = get_build_targets()
+        except Exception:  # noqa: BLE001
+            # No GPU and no named target: leave the frame unfiltered rather than
+            # emitting an empty lookup, matching what this code did before.
+            targets = None
+        if targets:
+            if "gfx" in tune_df.columns:
+                from aiter.jit.utils.build_targets import filter_tune_df
+
+                tune_df = filter_tune_df(tune_df, targets).reset_index()
+            else:
+                # Legacy CSV predating the gfx column: match on cu_num alone.
+                cu_nums = {cu for _, cu in targets}
+                tune_df = tune_df[tune_df["cu_num"].isin(cu_nums)].reset_index()
         # Accept either the legacy "kernelId" column or the new "solidx" column.
         kids = _tune_df_kids(tune_df)
         has_outdtype = "outdtype" in tune_df.columns
@@ -1375,6 +1379,36 @@ def _tune_df_kids(df):
         values = pd.to_numeric(df[col], errors="coerce")
         kids = values if kids is None else kids.fillna(values)
     return kids
+
+
+def _build_target_arches():
+    """Archs to compile kernels for, or None if none could be resolved."""
+    archs = {
+        a.strip().lower()
+        for a in os.getenv("GPU_ARCHS", "native").split(";")
+        if a.strip() and a.strip().lower() != "native"
+    }
+    if archs:
+        return archs
+
+    # GPU_ARCHS unset: AITER_GPU_TARGETS names (gfx, cu_num) pairs, several of
+    # which may share an arch.
+    try:
+        from aiter.jit.utils.build_targets import _parse_gpu_targets_env
+
+        named = _parse_gpu_targets_env()
+    except Exception:  # noqa: BLE001
+        named = None
+    if named:
+        return {gfx.lower() for gfx, _ in named}
+
+    # Nothing named: probe the live GPU, and skip the filter without one.
+    try:
+        from aiter.jit.utils.chip_info import get_gfx_runtime
+
+        return {get_gfx_runtime().lower()}
+    except Exception:  # noqa: BLE001
+        return None
 
 
 if __name__ == "__main__":
@@ -1522,23 +1556,7 @@ if __name__ == "__main__":
     # Per-arch filter: drop kids whose arch_prefix is not in the target build set.
     _kid_arch = _kid_arch_common
 
-    target_arches = None
-    gpu_archs_env = os.getenv("GPU_ARCHS", "native").strip()
-    explicit = [
-        a.strip().lower()
-        for a in gpu_archs_env.split(";")
-        if a.strip() and a.strip().lower() != "native"
-    ]
-    if explicit:
-        target_arches = set(explicit)
-    else:
-        # GPU_ARCHS=native: probe live GPU; skip filter if rocminfo unavailable.
-        try:
-            from aiter.jit.utils.chip_info import get_gfx_runtime
-
-            target_arches = {get_gfx_runtime().lower()}
-        except Exception:  # noqa: BLE001
-            target_arches = None
+    target_arches = _build_target_arches()
 
     if target_arches is not None:
         before = len(S)

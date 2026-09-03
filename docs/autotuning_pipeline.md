@@ -53,3 +53,85 @@ Based on this, we provide two CI paths: one for generating tuned CSVs on demand,
     3. The workflow uploads unittest logs and `/tmp/tuning_test_reports/` as artifacts so manual failures can be diagnosed without regenerating tuned CSVs.
 
     4. Unlike the manual tuning pipeline, this workflow does not call `op_tune.sh`, does not mutate tracked CSV files, and is intended only to verify that the tuning stack and existing tuned configs remain healthy in CI.
+
+## Tuning a second SKU of an architecture
+
+Some architectures ship in more than one size. MI350X/MI355X and MI350P are all `gfx950`, but
+the first two have 256 compute units and MI350P has 128. Tuned rows are keyed on
+`(gfx, cu_num, ...)`, so a tuned catalog for one does not apply to the other, and a build for
+the smaller part finds no rows at all.
+
+Because `cu_num` is part of the key, rows for a second SKU **cannot collide** with the existing
+ones — `(gfx950, 128)` and `(gfx950, 256)` are distinct keys for the same shape. Adding a
+catalog for a new SKU is additive.
+
+### 1. Tune on hardware that reports the target CU count
+
+The tuner takes the CU count from the live device (`multi_processor_count`) and the
+architecture from `rocminfo`. It does **not** read the `CU_NUM` environment variable, and this
+is deliberate: `CU_NUM` selects which rows a *build* uses, but a measurement has to come from
+real silicon. There is no way to produce 128-CU rows on a device that reports 256.
+
+Two ways to get a device that reports the target count:
+
+- The part itself.
+- A compute partition of a larger part that exposes the same count — for `gfx950`, a
+  DPX-partitioned MI355X exposes 128-CU devices. `multi_processor_count` is reported per
+  visible device, so the tuner stamps `cu_num=128` with no configuration.
+
+Note that a partition of a larger part is not identical to the smaller part: CUs per XCD and
+all per-CU resources match, but cache and memory topology need not. Prefer the real part when
+one is available.
+
+### 2. Run the tuners
+
+Nothing changes here — run them exactly as described above, whether through the CI pipeline or
+directly, for example:
+
+```bash
+python3 csrc/ck_gemm_a8w8/gemm_a8w8_tune.py -i aiter/configs/a8w8_untuned_gemm.csv \
+                                            -o aiter/configs/a8w8_tuned_gemm.csv
+```
+
+The rows come out stamped with the `gfx` and `cu_num` of the machine they ran on.
+
+### 3. Check the merge
+
+New rows for a new `cu_num` cannot collide with existing ones, but the tuning run may also have
+refreshed shapes that already exist. Run the collision guard before pushing:
+
+```bash
+python3 -m unittest op_tests.tuning_tests.test_config_shape_collision -v
+```
+
+If it reports duplicates, resolve them with the built-in dedup rather than by hand:
+
+```bash
+python3 op_tests/tuning_tests/test_config_shape_collision.py --fix
+```
+
+Keep the `gfx` column the tuner wrote. Architectures that share a `cu_num` are only
+distinguishable by it.
+
+### 4. Build for both SKUs
+
+Name every target the build should serve. `AITER_GPU_TARGETS` takes a `;`-separated list of
+`gfx` or `gfx:cu_num` entries:
+
+```bash
+AITER_GPU_TARGETS="gfx950:128;gfx950:256" pip install -e .
+```
+
+A bare `gfx950` entry uses the default CU count for that architecture, so name both explicitly
+when you want both baked. With the variable unset, `GPU_ARCHS` and `CU_NUM` behave as before.
+
+`GPU_ARCHS` cannot carry a `:cu_num` suffix: it is also passed to the compiler as an
+offload-arch flag and used as a directory name for the hsaco cache, so a suffixed value would
+split the cache and drop the assembly kernel table rather than fail.
+
+### 5. Rebuild after adding rows
+
+Config CSVs are filtered by `(gfx, cu_num)` at **build** time, not at run time. A library built
+before the new rows existed contains only the default kernel for that SKU — the tuned kernels
+are not merely unselected, they were never compiled. Adding rows therefore requires a rebuild,
+not just a config update.

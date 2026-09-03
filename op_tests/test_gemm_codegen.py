@@ -215,6 +215,70 @@ def test_get_build_targets():
             del os.environ["AITER_GPU_TARGETS"]
 
 
+def test_opus_bakes_both_skus():
+    _section("1c. opus gen_instances — bakes every named (gfx, cu_num)")
+
+    opus_dir = os.path.join(_REPO_ROOT, "csrc", "opus_gemm")
+    if not os.path.isdir(opus_dir):
+        print("  SKIP  csrc/opus_gemm not present")
+        return
+    sys.path.insert(0, opus_dir)
+    try:
+        import gen_instances as opus
+    except Exception as e:  # noqa: BLE001
+        print(f"  SKIP  opus gen_instances not importable ({e})")
+        return
+
+    kid = next(iter(sorted(opus.kernels_list)))
+    arch = opus._kid_arch_common(opus.kernels_list[kid])
+    orig = os.environ.pop("AITER_GPU_TARGETS", None)
+    orig_archs = os.environ.pop("GPU_ARCHS", None)
+    orig_cu = os.environ.pop("CU_NUM", None)
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as tmp:
+        pass
+    try:
+        pd.DataFrame(
+            {
+                "gfx": [arch, arch, "gfx942"],
+                "cu_num": [256, 128, 304],
+                "M": [1, 2, 3],
+                "N": [8, 8, 8],
+                "K": [16, 16, 16],
+                "solidx": [kid, kid, kid],
+            }
+        ).to_csv(tmp.name, index=False)
+
+        os.environ["AITER_GPU_TARGETS"] = f"{arch}:128;{arch}:256"
+        d = opus.get_tune_dict(tmp.name)
+        shapes = {k[0] for k in d if isinstance(k, tuple) and k[0] > 0}
+        _check(
+            f"AITER_GPU_TARGETS={arch}:128;{arch}:256 bakes both SKUs",
+            {1, 2} <= shapes,
+            str(sorted(shapes)),
+        )
+        _check("off-target gfx942 row is dropped", 3 not in shapes, str(sorted(shapes)))
+
+        os.environ["AITER_GPU_TARGETS"] = f"{arch}:128"
+        d = opus.get_tune_dict(tmp.name)
+        shapes = {k[0] for k in d if isinstance(k, tuple) and k[0] > 0}
+        _check(
+            f"AITER_GPU_TARGETS={arch}:128 bakes only the 128-CU row",
+            2 in shapes and 1 not in shapes,
+            str(sorted(shapes)),
+        )
+    finally:
+        os.unlink(tmp.name)
+        for name, val in (
+            ("AITER_GPU_TARGETS", orig),
+            ("GPU_ARCHS", orig_archs),
+            ("CU_NUM", orig_cu),
+        ):
+            if val is not None:
+                os.environ[name] = val
+            elif name in os.environ:
+                del os.environ[name]
+
+
 # ---------------------------------------------------------------------------
 # Section 2: gen_instances filter — uses filter_tune_df from build_targets
 # ---------------------------------------------------------------------------
@@ -959,6 +1023,7 @@ def test_build_tune_dict_strict_unknown_kernel():
 
 if __name__ == "__main__":
     test_get_build_targets()
+    test_opus_bakes_both_skus()
     test_gen_instances_filter(
         csv_path=REPRO_CSV,
         target_a=TARGET_C,
