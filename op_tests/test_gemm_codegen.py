@@ -9,9 +9,10 @@ Covers:
   - gen_instances filter: CSV row selection per (gfx, cu_num) target
   - write_lookup_header: C++ key format in generated lookup headers
   - Runtime dispatch key selection in gemm_op_a8w8.py et al.
+  - Opus generated lookup + exact-CU/legacy fallback behavior
 
-No GPU kernel execution or .so compilation required.  All tests run on CPU
-using only pandas and the chip_info / gemm_op_a8w8 Python layers.
+No GPU kernel execution or aiter .so compilation required. Tests run on CPU;
+the Opus lookup helper uses a host C++ compiler when one is available.
 
 Scenarios:
   1. get_build_targets() — env-driven target selection
@@ -26,6 +27,8 @@ Usage:
 
 import contextlib
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -290,6 +293,71 @@ def test_opus_bakes_both_skus():
                 os.environ[name] = val
             elif name in os.environ:
                 del os.environ[name]
+
+
+def test_opus_lookup_helper():
+    _section("1d. opus lookup helper — exact CU and legacy-only fallback")
+
+    compiler = shutil.which("c++") or shutil.which("clang++")
+    if compiler is None:
+        print("  SKIP  no host C++ compiler available")
+        return
+
+    header = os.path.join(
+        _REPO_ROOT, "csrc", "opus_gemm", "include", "opus_gemm_lookup_entry.cuh"
+    )
+    source = textwrap.dedent(
+        f"""
+        #include "{header}"
+        using Fn = int (*)();
+        int f128() {{ return 128; }}
+        int f256() {{ return 256; }}
+        int legacy() {{ return 0; }}
+        struct Entry {{ OpusLookupKey key; Fn func; }};
+
+        int main() {{
+            const Entry co[] = {{{{{{1, 2, 3, 128}}, &f128}}}};
+            const Entry co_legacy[] = {{{{{{1, 2, 3, 0}}, &legacy}}}};
+            const Entry regular[] = {{{{{{1, 2, 3, 256}}, &f256}}}};
+            const Entry old[] = {{{{{{1, 2, 3, 0}}, &legacy}}}};
+            if (opus_lookup_find(co, co + 1, 1, 2, 3, 256, false)
+                != nullptr) return 1;
+            if (opus_lookup_find(co_legacy, co_legacy + 1, 1, 2, 3, 256, false)
+                != nullptr) return 4;
+            auto* exact = opus_lookup_find(regular, regular + 1, 1, 2, 3, 256);
+            if (exact == nullptr || exact->func() != 256) return 2;
+            auto* compatible = opus_lookup_find(co, co + 1, 1, 2, 3, 64);
+            if (compatible == nullptr || compatible->func() != 128) return 5;
+            auto* fallback = opus_lookup_find(old, old + 1, 1, 2, 3, 64);
+            if (fallback == nullptr || fallback->func() != 0) return 3;
+            return 0;
+        }}
+        """
+    )
+    with tempfile.TemporaryDirectory() as out_dir:
+        src = os.path.join(out_dir, "lookup_test.cpp")
+        exe = os.path.join(out_dir, "lookup_test")
+        with open(src, "w") as f:
+            f.write(source)
+        compiled = subprocess.run(
+            [compiler, "-std=c++17", src, "-o", exe],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        _check(
+            "lookup helper compiles as host C++",
+            compiled.returncode == 0,
+            compiled.stderr,
+        )
+        if compiled.returncode != 0:
+            return
+        ran = subprocess.run([exe], capture_output=True, text=True, check=False)
+        _check(
+            "wrong-CU .co entry cannot shadow exact regular winner",
+            ran.returncode == 0,
+            f"exit={ran.returncode} stderr={ran.stderr}",
+        )
 
 
 def test_runtime_arch_and_cache_identity():
@@ -1244,6 +1312,7 @@ def test_build_tune_dict_strict_unknown_kernel():
 if __name__ == "__main__":
     test_get_build_targets()
     test_opus_bakes_both_skus()
+    test_opus_lookup_helper()
     test_runtime_arch_and_cache_identity()
     test_cpp_itfs_cache_identity()
     test_gen_instances_filter(

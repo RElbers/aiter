@@ -246,6 +246,13 @@ _WS_PARTIAL_TAGS = {
 }
 
 
+def _key_cu_num(mnk):
+    """cu_num from a get_tune_dict key. 0 for pre-cu_num keys: no device reports
+    it, so those entries resolve through opus_lookup_find's shape-only fallback.
+    """
+    return int(mnk[5]) if len(mnk) >= 6 else 0
+
+
 def _ws_partial_ctype(k):
     """The kid's split-K partial ctype, or None if its slot is a real dtype."""
     if k.kernel_tag not in _WS_PARTIAL_TAGS:
@@ -590,7 +597,8 @@ class opus_gemm_codegen:
         Outdtype-aware bucketing
         ------------------------
         kernels_dict tuple keys carry the outdtype string in slot 3
-        ((M, N, K, outdtype_str, arch), produced by get_tune_dict). The BF16
+        ((M, N, K, outdtype_str, arch, cu_num), produced by get_tune_dict).
+        The BF16
         macro picks up rows whose outdtype is "torch.bfloat16" and the
         FP32 macro picks up rows whose outdtype is "torch.float32";
         same-(M,N,K) rows with different outdtypes therefore land in
@@ -617,27 +625,30 @@ class opus_gemm_codegen:
 //
 // Auto-generated. Do not edit. See gen_instances.py:gen_lookup_dict.
 //
-// Per-(CTYPE, arch) sorted flat arrays for (M,N,K)->kernel runtime dispatch.
-// Same (M,N,K) can resolve to different kernels in the BF16 vs FP32
-// tables because get_tune_dict keys winners on (M, N, K, outdtype_str, arch)
-// and gen_lookup_dict buckets the rows into per-(CTYPE, arch) macros below.
+// Per-(CTYPE, arch) sorted flat arrays for (M,N,K,cu_num)->kernel runtime
+// dispatch. Same (M,N,K) can resolve to different kernels in the BF16 vs FP32
+// tables because get_tune_dict keys winners on
+// (M, N, K, outdtype_str, arch, cu_num) and gen_lookup_dict buckets the rows
+// into per-(CTYPE, arch) macros below; cu_num stays in the entry so one build
+// can serve several CU counts of one arch.
 // splitk kids appear in either table with their dispatch template forced
 // to <fp32_t>; their traits pick the workspace dtype and the reduce
 // launcher writes the requested Y dtype.
 //
-// Lookup is std::lower_bound on the lex-ordered (M, N, K) key. See
-// opus_gemm_arch_gfx950.cuh for the dispatch wrapper.
+// Lookup is opus_lookup_find (opus_gemm_lookup_entry.cuh): std::lower_bound on
+// the lex-ordered (M, N, K, cu_num) key, then the device's cu_num within the
+// shape's block. See opus_gemm_arch_gfx950.cuh for the dispatch wrapper.
 """
 
         ENTRY_MATCH_CTYPE = """\
-    {{ {{{M}, {N}, {K}}}, &{kernel_name}<CTYPE> }},  \\
+    {{ {{{M}, {N}, {K}, {CU}}}, &{kernel_name}<CTYPE> }},  \\
 """
         ENTRY_FORCE_FP32 = """\
-    {{ {{{M}, {N}, {K}}}, &{kernel_name}<fp32_t> }}, \\
+    {{ {{{M}, {N}, {K}, {CU}}}, &{kernel_name}<fp32_t> }}, \\
 """
         # _ws families: the template slot is the split-K partial type, per-kid.
         ENTRY_WS_PARTIAL = """\
-    {{ {{{M}, {N}, {K}}}, &{kernel_name}<{ctype}> }}, \\
+    {{ {{{M}, {N}, {K}, {CU}}}, &{kernel_name}<{ctype}> }}, \\
 """
 
         # Map ctype short name -> CSV outdtype string emitted by the
@@ -682,22 +693,23 @@ class opus_gemm_codegen:
                         int(mnk[0]),
                         int(mnk[1]),
                         int(mnk[2]),
+                        _key_cu_num(mnk),
                         k.name,
                         is_splitk,
                         _ws_partial_ctype(k),
                     )
                 )
 
-            rows.sort(key=lambda r: (r[0], r[1], r[2]))
+            rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
             n = len(rows)
-            for i, (M, N, K, name, is_splitk, ws_ctype) in enumerate(rows):
+            for i, (M, N, K, CU, name, is_splitk, ws_ctype) in enumerate(rows):
                 if ws_ctype is not None:
                     line = ENTRY_WS_PARTIAL.format(
-                        M=M, N=N, K=K, kernel_name=name, ctype=ws_ctype
+                        M=M, N=N, K=K, CU=CU, kernel_name=name, ctype=ws_ctype
                     )
                 else:
                     entry = ENTRY_FORCE_FP32 if is_splitk else ENTRY_MATCH_CTYPE
-                    line = entry.format(M=M, N=N, K=K, kernel_name=name)
+                    line = entry.format(M=M, N=N, K=K, CU=CU, kernel_name=name)
                 if i == n - 1:
                     # Last entry: drop the trailing `\` so the macro
                     # ends cleanly. Strip the line's continuation.
@@ -732,13 +744,20 @@ class opus_gemm_codegen:
                     if want is not None and str(mnk[3]) != want:
                         continue
                 rows.append(
-                    (int(mnk[0]), int(mnk[1]), int(mnk[2]), k.name, k.output_dtypes[0])
+                    (
+                        int(mnk[0]),
+                        int(mnk[1]),
+                        int(mnk[2]),
+                        _key_cu_num(mnk),
+                        k.name,
+                        k.output_dtypes[0],
+                    )
                 )
 
-            rows.sort(key=lambda r: (r[0], r[1], r[2]))
+            rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
             n = len(rows)
-            for i, (M, N, K, name, ctype) in enumerate(rows):
-                line = f"    {{ {{{M}, {N}, {K}}}, &{name}<{ctype}> }}, \\\n"
+            for i, (M, N, K, CU, name, ctype) in enumerate(rows):
+                line = f"    {{ {{{M}, {N}, {K}, {CU}}}, &{name}<{ctype}> }}, \\\n"
                 if i == n - 1:
                     line = line.rstrip().rstrip("\\").rstrip() + "\n"
                 f.write(line)
@@ -1306,23 +1325,26 @@ def get_tune_dict(tune_dict_csv):
 
     Key layout
     ----------
-    Tuple keys: (M, N, K, outdtype_str, arch). Promoting outdtype into the
-    key is what lets a single (M, N, K) shape carry distinct winners for
+    Tuple keys: (M, N, K, outdtype_str, arch, cu_num). Promoting outdtype into
+    the key is what lets a single (M, N, K) shape carry distinct winners for
     bf16 vs fp32 output (the underlying main kernel hardware rules differ
     enough that the best kid is not always the same; e.g. fp32 output
     biases reduce-bound shapes toward larger split-K). gen_lookup_dict
     then writes outdtype="torch.bfloat16" rows only into the BF16 (M,N,K)
     map and outdtype="torch.float32" rows only into the FP32 (M,N,K) map.
 
-    arch is in the key for the same reason: the (M,N,K) tables are emitted
-    per arch, so a shape tuned on two arches has one winner per arch. With
-    arch out of the key, whichever CSV row was read last silently evicted
-    the other arch's winner and that arch fell back to its heuristic.
+    arch and cu_num are in the key for the same reason: the tables are emitted
+    per arch and carry cu_num in the C++ key, so a shape tuned on two arches or
+    on two SKUs of one arch has one winner per target. With either out of the
+    key, whichever CSV row was read last silently evicted the other target's
+    winner and that target fell back to its heuristic.
 
     Backwards compat
     ----------------
     Legacy CSVs without an `outdtype` column are interpreted as
-    bf16-output (matches what the tuner used to write). int keys from
+    bf16-output (matches what the tuner used to write); ones without a
+    `cu_num` column key on 0, which no device matches, so they resolve
+    through opus_lookup_find's shape-only fallback. int keys from
     default_kernels_dict are passed through untouched -- gen_lookup_dict
     skips them via the `isinstance(mnk, tuple) and mnk[0] > 0` guard.
     """
@@ -1355,6 +1377,7 @@ def get_tune_dict(tune_dict_csv):
         # Accept either the legacy "kernelId" column or the new "solidx" column.
         kids = _tune_df_kids(tune_df)
         has_outdtype = "outdtype" in tune_df.columns
+        has_cu_num = "cu_num" in tune_df.columns
         for i in range(len(tune_df)):
             if kids is None or pd.isna(kids.loc[i]):
                 continue
@@ -1364,10 +1387,12 @@ def get_tune_dict(tune_dict_csv):
             outdtype = (
                 str(tune_df.loc[i, "outdtype"]) if has_outdtype else "torch.bfloat16"
             )
+            cu_value = tune_df.loc[i, "cu_num"] if has_cu_num else None
+            cu_num = 0 if cu_value is None or pd.isna(cu_value) else int(cu_value)
             kid = int(kids.loc[i])
             if kid in kernels_list:
                 inst = kernels_list[kid]
-                tune_dict[(M, N, K, outdtype, _kid_arch_common(inst))] = inst
+                tune_dict[(M, N, K, outdtype, _kid_arch_common(inst), cu_num)] = inst
     return tune_dict
 
 
