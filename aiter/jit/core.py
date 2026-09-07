@@ -1320,6 +1320,20 @@ def _is_union(origin):
     return origin is typing.Union or origin is types.UnionType
 
 
+def _prepare_ctypes_build_args(md_name):
+    d_args = get_args_of_build(md_name)
+    # Pure C-ABI modules can take the lightweight torch-free build. A hybrid
+    # module with a pybind TU must retain its configured build mode, otherwise
+    # the ctypes first-call path can overwrite the shared .so with one that
+    # later Python-module imports cannot load.
+    has_pybind_tu = any(
+        "pybind" in os.path.basename(str(src)).lower() for src in d_args["srcs"]
+    )
+    if not has_pybind_tu:
+        d_args["torch_exclude"] = True
+    return d_args
+
+
 # Per-parameter conversion kinds, resolved once per op from the type hints (see
 # _ensure_loaded) so the per-call loop is an int compare instead of a fresh
 # typing.get_origin/get_args round trip. _ARG_SCALAR covers int/float/anything
@@ -1382,8 +1396,7 @@ def _ctypes_call(func, fc_name, md_name):
             return
         so_path = os.path.join(get_user_jit_dir(), f"{md_name}.so")
         if not os.path.exists(so_path) or _needs_arch_rebuild(md_name):
-            d_args = get_args_of_build(md_name)
-            d_args["torch_exclude"] = True
+            d_args = _prepare_ctypes_build_args(md_name)
             build_module(
                 md_name,
                 d_args["srcs"],
