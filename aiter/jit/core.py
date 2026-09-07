@@ -22,6 +22,7 @@ from packaging.version import Version, parse
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, f"{this_dir}/utils/")
+from build_targets import get_build_archs_env
 from chip_info import get_gfx, get_gfx_list, get_gfx_runtime
 from cpp_extension import _jit_compile, executable_path, get_hip_version
 from file_baton import FileBaton
@@ -536,8 +537,25 @@ if multiprocessing.current_process().name == "MainProcess":
 
 
 def validate_and_update_archs():
-    archs = os.getenv("GPU_ARCHS", "native").split(";")
-    archs = [arch.strip() for arch in archs]
+    # AITER_GPU_TARGETS names the (gfx, cu_num) pairs a build serves and is the
+    # authority for the arch set too: an arch that only reaches the lookup
+    # tables would ship dispatch entries for device code hipcc never emitted.
+    named = get_build_archs_env()
+    if named is not None:
+        archs = list(named)
+        gpu_archs = os.getenv("GPU_ARCHS", "").strip()
+        explicit = {
+            a.strip()
+            for a in gpu_archs.split(";")
+            if a.strip() and a.strip() != "native"
+        }
+        if explicit and explicit != set(archs):
+            logger.warning(
+                f"GPU_ARCHS={sorted(explicit)} disagrees with "
+                f"AITER_GPU_TARGETS={archs}; compiling for {archs}."
+            )
+    else:
+        archs = [arch.strip() for arch in os.getenv("GPU_ARCHS", "native").split(";")]
     # List of allowed architectures
     allowed_archs = [
         "native",
@@ -962,11 +980,11 @@ def build_module(
         # HIP_LAUNCH_CONFIG appear in ROCm 7.0), not a question about which GPU
         # this machine has -- so the arch test must accept a cross-compile for
         # gfx1250 the way the gfx1250 flags in optCompilerConfig.json already do.
-        # get_gfx() alone reads the LAST entry of a multi-arch GPU_ARCHS, which
+        # get_gfx() alone reads the LAST entry of a multi-arch target list, which
         # left "gfx1250;gfx942" building gfx1250 kernels whose cluster launch
         # path was compiled out (AiterAsmKernelFast then rejects them at launch).
         if (
-            get_gfx() == "gfx1250" or "gfx1250" in os.environ.get("GPU_ARCHS", "")
+            get_gfx() == "gfx1250" or "gfx1250" in validate_and_update_archs()
         ) and hip_version >= Version("7.0.0"):
             flags_hip += ["-DAITER_ENABLE_CLUSTER_LAUNCH"]
 
