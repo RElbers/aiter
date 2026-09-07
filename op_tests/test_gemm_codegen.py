@@ -166,14 +166,26 @@ def test_get_build_targets():
             str(t),
         )
 
-        # 1.9 Bare entry falls back to the GFX_CU_NUM_MAP default
+        # 1.9 Exact duplicates are removed without changing caller order.
+        os.environ["AITER_GPU_TARGETS"] = (
+            f"{TARGET_D[0]}:{TARGET_D[1]},{TARGET_B[0]}:{TARGET_B[1]};"
+            f"{TARGET_D[0]}:{TARGET_D[1]}"
+        )
+        t = get_build_targets_env()
+        _check(
+            "AITER_GPU_TARGETS preserves first-occurrence order",
+            t == [TARGET_D, TARGET_B],
+            str(t),
+        )
+
+        # 1.10 Bare entry falls back to the GFX_CU_NUM_MAP default
         os.environ["AITER_GPU_TARGETS"] = TARGET_B[0]
         t = get_build_targets_env()
         _check(
             f"AITER_GPU_TARGETS={TARGET_B[0]} → [{TARGET_B}]", t == [TARGET_B], str(t)
         )
 
-        # 1.10 Wins over a conflicting GPU_ARCHS + CU_NUM
+        # 1.11 Wins over a conflicting GPU_ARCHS + CU_NUM
         os.environ["GPU_ARCHS"] = TARGET_A[0]
         os.environ["CU_NUM"] = str(TARGET_C[1])
         os.environ["AITER_GPU_TARGETS"] = f"{TARGET_D[0]}:{TARGET_D[1]}"
@@ -185,7 +197,7 @@ def test_get_build_targets():
         del os.environ["CU_NUM"]
         del os.environ["AITER_GPU_TARGETS"]
 
-        # 1.11 Live GPU fallback — requires torch and a GPU; skipped otherwise
+        # 1.12 Live GPU fallback — requires torch and a GPU; skipped otherwise
         try:
             from aiter.jit.utils.chip_info import get_build_targets
 
