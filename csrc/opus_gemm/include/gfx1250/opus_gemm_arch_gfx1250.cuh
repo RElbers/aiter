@@ -103,7 +103,7 @@ opus_a16w16_co_tune_dispatch_gfx1250(int id)
 // no tuned .co winner" and the caller carries on with the split-K path.
 inline opus_gfx1250_detail::OpusA16W16CoKernel
 opus_a16w16_co_dispatch_gfx1250(
-    int M, int N, int K, bool allow_fallback = true)
+    int M, int N, int K, bool allow_fallback = false)
 {
     using namespace opus_gfx1250_detail;
     static constexpr OpusA16W16CoRuntimeEntry kLookup[] = {
