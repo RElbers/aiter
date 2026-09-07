@@ -68,9 +68,11 @@ catalog for a new SKU is additive.
 ### 1. Tune on hardware that reports the target CU count
 
 The tuner takes the CU count from the live device (`multi_processor_count`) and the
-architecture from `rocminfo`. It does **not** read the `CU_NUM` environment variable, and this
-is deliberate: `CU_NUM` selects which rows a *build* uses, but a measurement has to come from
-real silicon. There is no way to produce 128-CU rows on a device that reports 256.
+architecture from `rocminfo`, and this is deliberate: `CU_NUM` selects which rows a *build*
+uses, but a measurement has to come from real silicon. There is no way to produce 128-CU rows
+on a device that reports 256. (The opus tuner does fall back to `chip_info.get_cu_num`, which
+honours `CU_NUM`, when torch's device enumeration fails — leave `CU_NUM` unset while tuning so
+that fallback cannot mislabel a row.)
 
 Two ways to get a device that reports the target count:
 
@@ -111,12 +113,15 @@ python3 op_tests/tuning_tests/test_config_shape_collision.py --fix
 ```
 
 Keep the `gfx` column the tuner wrote. Architectures that share a `cu_num` are only
-distinguishable by it.
+distinguishable by that column. For backward compatibility, legacy AOT rows without `gfx`
+still use the historical CU-to-arch inference and emit a warning; re-tune them to remove the
+ambiguity.
 
 ### 4. Build for both SKUs
 
-Name every target the build should serve. `AITER_GPU_TARGETS` takes a `;`-separated list of
-`gfx` or `gfx:cu_num` entries:
+Name every target the build should serve. `AITER_GPU_TARGETS` takes a `;`- or `,`-separated
+list of `gfx` or `gfx:cu_num` entries. Ordering and duplicate entries do not change the target
+set or its cache identity:
 
 ```bash
 AITER_GPU_TARGETS="gfx950:128;gfx950:256" pip install -e .
@@ -125,13 +130,35 @@ AITER_GPU_TARGETS="gfx950:128;gfx950:256" pip install -e .
 A bare `gfx950` entry uses the default CU count for that architecture, so name both explicitly
 when you want both baked. With the variable unset, `GPU_ARCHS` and `CU_NUM` behave as before.
 
-`GPU_ARCHS` cannot carry a `:cu_num` suffix: it is also passed to the compiler as an
-offload-arch flag and used as a directory name for the hsaco cache, so a suffixed value would
-split the cache and drop the assembly kernel table rather than fail.
+When `AITER_GPU_TARGETS` is set it is the authority for the whole build: its arch set is what
+reaches `--offload-arch`, so `GPU_ARCHS` does not need to be set alongside it, and if both are
+set and disagree the build warns and follows `AITER_GPU_TARGETS`.
+
+`GPU_ARCHS` cannot carry a `:cu_num` suffix and rejects one; use `CU_NUM` for its single global
+CU override. Without `CU_NUM`, the count comes from the live device when it matches the named
+arch, and from `GFX_CU_NUM_MAP` otherwise. For backward compatibility, FlyDSL AOT keeps a bare
+`GPU_ARCHS` value as an arch-wide filter even when `CU_NUM` is also set.
 
 ### 5. Rebuild after adding rows
 
-Config CSVs are filtered by `(gfx, cu_num)` at **build** time, not at run time. A library built
-before the new rows existed contains only the default kernel for that SKU — the tuned kernels
-are not merely unselected, they were never compiled. Adding rows therefore requires a rebuild,
-not just a config update.
+Which kernels a module *contains* is decided at **build** time: config CSVs are filtered by
+`(gfx, cu_num)` before codegen, so a library built before the new rows existed holds only the
+default kernel for that SKU. The tuned kernels are not merely unselected, they were never
+compiled. The packaging FlyDSL AOT path applies the same filter to available targets.
+Missing requested targets emit a warning and retain their existing runtime fallback. Adding
+rows therefore requires a rebuild, not just a config update.
+
+Some ops read the tuned CSV again at run time and index it on `(gfx, cu_num, M, N, K)` —
+`get_CKGEMM_config` in `aiter/ops/gemm_op_a8w8.py` and the MoE equivalent in
+`aiter/fused_moe.py` do. There the key has to match too: setting `CU_NUM` in a serving
+environment changes the runtime key. If that row was not baked, the wrapper either takes its
+documented default or the C++ registry rejects the unavailable kernel name; do not use
+`CU_NUM` to impersonate hardware in serving. Opus checks all exact-CU tables first; on a miss,
+it preserves compatibility by preferring a legacy `cu_num=0` row and then the shape's first
+available tuned winner before using the heuristic.
+
+Every generated module records the resolved `(gfx, cu_num)` targets next to its `.so`.
+Changing `AITER_GPU_TARGETS`, `GPU_ARCHS`, `CU_NUM`, or the live same-arch SKU invalidates an
+incompatible local module automatically. A fat prebuilt module remains valid after the
+build-only variables are unset when its recorded target and primary-arch identity are
+compatible with the live device.
