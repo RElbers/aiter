@@ -9,7 +9,9 @@ Covers:
   - gen_instances filter: CSV row selection per (gfx, cu_num) target
   - write_lookup_header: C++ key format in generated lookup headers
   - Runtime dispatch key selection in gemm_op_a8w8.py et al.
+  - FlyDSL packaging AOT filtering and legacy fallback compatibility
   - Opus generated lookup + exact-CU/legacy fallback behavior
+  - JIT, template-library, and HSACO cache target identity
 
 No GPU kernel execution or aiter .so compilation required. Tests run on CPU;
 the Opus lookup helper uses a host C++ compiler when one is available.
@@ -19,6 +21,7 @@ Scenarios:
   2. gen_instances filter — CSV row selection per target GPU
   3. write_lookup_header — C++ key format in generated lookup header
   4. Runtime dispatch key selection — (gfx, cu_num, M, N, K) lookup
+  5. AOT and cache identity regressions
 
 Usage:
     python op_tests/test_gemm_codegen.py
@@ -238,6 +241,7 @@ def test_opus_bakes_both_skus():
     if not os.path.isdir(opus_dir):
         print("  SKIP  csrc/opus_gemm not present")
         return
+
     orig_path = list(sys.path)
     orig_modules = set(sys.modules)
     orig_env = {
@@ -498,6 +502,90 @@ def test_opus_lookup_helper():
             ran.returncode == 0,
             f"exit={ran.returncode} stderr={ran.stderr}",
         )
+
+
+def test_flydsl_aot_target_filter():
+    _section("1e. production FlyDSL AOT — compatible target filtering")
+
+    import aiter.aot.flydsl.common as aot_common
+    from aiter.aot.flydsl.common import OpKind, _filter_collected_aot_jobs
+
+    env_names = ("AITER_GPU_TARGETS", "GPU_ARCHS", "CU_NUM", "ARCH")
+    original = {name: os.environ.pop(name, None) for name in env_names}
+    jobs = [
+        {"kernel_name": "k128", "gfx": "gfx950", "cu_num": 128},
+        {"kernel_name": "k256", "gfx": "gfx950", "cu_num": 256},
+        # Same CU as k128, so gfx must participate in the filter.
+        {"kernel_name": "other_arch", "gfx": "gfx942", "cu_num": 128},
+    ]
+    try:
+        os.environ["AITER_GPU_TARGETS"] = "gfx950:256;gfx950:128"
+        with mock.patch.object(aot_common, "collect_aot_jobs", return_value=jobs):
+            selected = aot_common._collect_aot_jobs_for(OpKind.GEMM)
+        _check(
+            "production packaging collector filters targets and same-CU other gfx",
+            {job["kernel_name"] for job in selected} == {"k128", "k256"},
+            str(selected),
+        )
+
+        os.environ["AITER_GPU_TARGETS"] = "gfx950:128;gfx950:64"
+        selected = _filter_collected_aot_jobs(OpKind.GEMM, jobs)
+        _check(
+            "partial requested target coverage preserves available jobs",
+            [job["kernel_name"] for job in selected] == ["k128"],
+            str(selected),
+        )
+
+        os.environ["AITER_GPU_TARGETS"] = "gfx950:128"
+        selected = _filter_collected_aot_jobs(
+            OpKind.GEMM,
+            [{"kernel_name": "legacy", "gfx": "", "cu_num": 128}],
+        )
+        _check(
+            "targeted AOT preserves legacy rows missing gfx identity",
+            [job["kernel_name"] for job in selected] == ["legacy"],
+            str(selected),
+        )
+
+        del os.environ["AITER_GPU_TARGETS"]
+        os.environ["GPU_ARCHS"] = "gfx950"
+        os.environ["CU_NUM"] = "128"
+        selected = _filter_collected_aot_jobs(OpKind.GEMM, jobs)
+        _check(
+            "legacy GPU_ARCHS remains arch-wide when CU_NUM is set",
+            [job["kernel_name"] for job in selected] == ["k128", "k256"],
+            str(selected),
+        )
+        del os.environ["CU_NUM"]
+        os.environ["GPU_ARCHS"] = "gfx942"
+        selected = _filter_collected_aot_jobs(OpKind.GEMM, jobs)
+        _check(
+            "legacy GPU_ARCHS without CU_NUM remains an arch-wide filter",
+            [job["kernel_name"] for job in selected] == ["other_arch"],
+            str(selected),
+        )
+        os.environ["GPU_ARCHS"] = " ; "
+        raised = False
+        try:
+            _filter_collected_aot_jobs(OpKind.GEMM, jobs)
+        except RuntimeError:
+            raised = True
+        _check("separator-only GPU_ARCHS is rejected", raised)
+
+        del os.environ["GPU_ARCHS"]
+        os.environ["ARCH"] = " , "
+        raised = False
+        try:
+            _filter_collected_aot_jobs(OpKind.GEMM, jobs)
+        except RuntimeError:
+            raised = True
+        _check("separator-only ARCH is rejected", raised)
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def test_runtime_arch_and_cache_identity():
@@ -1453,6 +1541,7 @@ if __name__ == "__main__":
     test_get_build_targets()
     test_opus_bakes_both_skus()
     test_opus_lookup_helper()
+    test_flydsl_aot_target_filter()
     test_runtime_arch_and_cache_identity()
     test_cpp_itfs_cache_identity()
     test_gen_instances_filter(
