@@ -5,9 +5,22 @@ import glob
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pandas as pd
+
+this_dir = os.path.dirname(os.path.abspath(__file__))
+AITER_CORE_DIR = (
+    os.path.join(os.path.abspath(f"{this_dir}/../../../"), "aiter/jit/utils")
+    if os.path.exists(
+        os.path.join(os.path.abspath(f"{this_dir}/../../../"), "aiter_meta")
+    )
+    else os.path.abspath(f"{this_dir}/../../aiter/jit/utils")
+)
+sys.path.insert(0, AITER_CORE_DIR)
+from build_targets import filter_tune_df, has_named_targets
+from chip_info import get_build_targets
 from codegen import gen_instances_gfx942 as _gfx942  # noqa: F401
 
 # Import for side-effect: each arch module self-registers into EMIT_REGISTRY
@@ -251,6 +264,60 @@ def _key_cu_num(mnk):
     it, so those entries resolve through opus_lookup_find's shape-only fallback.
     """
     return int(mnk[5]) if len(mnk) >= 6 else 0
+
+
+def _resolve_build_targets():
+    try:
+        return get_build_targets()
+    except RuntimeError:
+        # A GPU-less host with no explicit target keeps legacy unfiltered
+        # behavior. A malformed or otherwise unresolved named target is an
+        # actionable build configuration error.
+        if has_named_targets():
+            raise
+        return None
+
+
+def _filter_opus_df_for_targets(tune_df, targets, source=""):
+    if not targets:
+        return tune_df
+    columns = set(tune_df.columns)
+    if {"gfx", "cu_num"} <= columns:
+        # Concatenating modern and legacy CSVs creates NaN in the missing
+        # target columns. Preserve those rows as the documented arch-only,
+        # CU-only, or fully shape-only fallback instead of dropping them in an
+        # exact pair comparison.
+        has_gfx = tune_df["gfx"].notna() & tune_df["gfx"].astype(str).str.strip().ne("")
+        has_cu = tune_df["cu_num"].notna()
+        if not ((~has_gfx) | (~has_cu)).any():
+            return filter_tune_df(tune_df, targets, source=source)
+        archs = {gfx for gfx, _ in targets}
+        cu_nums = {cu_num for _, cu_num in targets}
+        exact = False
+        for gfx, cu_num in targets:
+            exact |= (
+                has_gfx
+                & has_cu
+                & tune_df["gfx"].astype(str).str.lower().eq(gfx)
+                & tune_df["cu_num"].eq(cu_num)
+            )
+        gfx_only = (
+            has_gfx
+            & ~has_cu
+            & tune_df["gfx"].astype(str).str.lower().isin(archs)
+        )
+        cu_only = ~has_gfx & has_cu & tune_df["cu_num"].isin(cu_nums)
+        fully_legacy = ~has_gfx & ~has_cu
+        return tune_df[exact | gfx_only | cu_only | fully_legacy]
+    if "gfx" in columns:
+        archs = {gfx for gfx, _ in targets}
+        return tune_df[tune_df["gfx"].astype(str).str.lower().isin(archs)]
+    if "cu_num" in columns:
+        cu_nums = {cu_num for _, cu_num in targets}
+        return tune_df[tune_df["cu_num"].isin(cu_nums)]
+    # Fully legacy rows carry neither target field. Their kernel id still
+    # determines the generated per-arch table and CU=0 marks shape fallback.
+    return tune_df
 
 
 def _ws_partial_ctype(k):
@@ -1320,7 +1387,7 @@ void
         self.gen_bmm_mxscale_tune_lookup(kernels_dict)
 
 
-def get_tune_dict(tune_dict_csv):
+def get_tune_dict(tune_dict_csv, source=None):
     """Load a tuned CSV into the lookup-dict shape consumed by gen_lookup_dict.
 
     Key layout
@@ -1356,24 +1423,12 @@ def get_tune_dict(tune_dict_csv):
         # (AITER_GPU_TARGETS=gfx950:128;gfx950:256), and may target hardware the
         # builder does not have. get_build_targets() falls back to the live GPU
         # when no target is named, which is the previous behaviour.
-        targets = None
-        try:
-            from aiter.jit.utils.chip_info import get_build_targets
-
-            targets = get_build_targets()
-        except Exception:  # noqa: BLE001
-            # No GPU and no named target: leave the frame unfiltered rather than
-            # emitting an empty lookup, matching what this code did before.
-            targets = None
-        if targets:
-            if "gfx" in tune_df.columns:
-                from aiter.jit.utils.build_targets import filter_tune_df
-
-                tune_df = filter_tune_df(tune_df, targets).reset_index()
-            else:
-                # Legacy CSV predating the gfx column: match on cu_num alone.
-                cu_nums = {cu for _, cu in targets}
-                tune_df = tune_df[tune_df["cu_num"].isin(cu_nums)].reset_index()
+        targets = _resolve_build_targets()
+        tune_df = _filter_opus_df_for_targets(
+            tune_df,
+            targets,
+            source=source or os.path.basename(tune_dict_csv),
+        ).reset_index()
         # Accept either the legacy "kernelId" column or the new "solidx" column.
         kids = _tune_df_kids(tune_df)
         has_outdtype = "outdtype" in tune_df.columns
@@ -1384,8 +1439,11 @@ def get_tune_dict(tune_dict_csv):
             M = tune_df.loc[i, "M"]
             N = tune_df.loc[i, "N"]
             K = tune_df.loc[i, "K"]
+            outdtype_value = tune_df.loc[i, "outdtype"] if has_outdtype else None
             outdtype = (
-                str(tune_df.loc[i, "outdtype"]) if has_outdtype else "torch.bfloat16"
+                "torch.bfloat16"
+                if outdtype_value is None or pd.isna(outdtype_value)
+                else str(outdtype_value)
             )
             cu_value = tune_df.loc[i, "cu_num"] if has_cu_num else None
             cu_num = 0 if cu_value is None or pd.isna(cu_value) else int(cu_value)
@@ -1406,34 +1464,41 @@ def _tune_df_kids(df):
     return kids
 
 
-def _build_target_arches():
-    """Archs to compile kernels for, or None if none could be resolved."""
-    archs = {
-        a.strip().lower()
-        for a in os.getenv("GPU_ARCHS", "native").split(";")
-        if a.strip() and a.strip().lower() != "native"
-    }
-    if archs:
-        return archs
+def _collect_csv_kids(csv_paths, targets):
+    csv_kids: set[int] = set()
+    for path in csv_paths:
+        try:
+            df = pd.read_csv(path)
+        except (pd.errors.EmptyDataError, FileNotFoundError):
+            continue
+        if "libtype" not in df.columns:
+            continue
+        df = df[df["libtype"] == "opus"]
+        if df.empty:
+            continue
+        df = _filter_opus_df_for_targets(df, targets, source=path)
+        if df.empty:
+            continue
+        kids = _tune_df_kids(df)
+        if kids is None:
+            continue
+        for value in kids.dropna().tolist():
+            try:
+                csv_kids.add(int(value))
+            except (TypeError, ValueError):
+                continue
+    return csv_kids
 
-    # GPU_ARCHS unset: AITER_GPU_TARGETS names (gfx, cu_num) pairs, several of
-    # which may share an arch.
-    try:
-        from aiter.jit.utils.build_targets import _parse_gpu_targets_env
 
-        named = _parse_gpu_targets_env()
-    except Exception:  # noqa: BLE001
-        named = None
-    if named:
-        return {gfx.lower() for gfx, _ in named}
+def _build_target_arches(targets=None):
+    """Archs to compile kernels for, or None if none could be resolved.
 
-    # Nothing named: probe the live GPU, and skip the filter without one.
-    try:
-        from aiter.jit.utils.chip_info import get_gfx_runtime
-
-        return {get_gfx_runtime().lower()}
-    except Exception:  # noqa: BLE001
-        return None
+    Same resolution get_tune_dict filters rows with, so the kid set and the
+    lookup tables can never disagree about which arch the build serves.
+    """
+    if targets is None:
+        targets = _resolve_build_targets()
+    return None if targets is None else {gfx.lower() for gfx, _ in targets}
 
 
 if __name__ == "__main__":
@@ -1542,26 +1607,9 @@ if __name__ == "__main__":
                 out.append(path)
         return out
 
-    csv_kids: set[int] = set()
+    targets = _resolve_build_targets()
     csv_paths = _expand_tune_paths(args.tune_files)
-    for path in csv_paths:
-        try:
-            df = pd.read_csv(path)
-        except (pd.errors.EmptyDataError, FileNotFoundError):
-            continue
-        if "libtype" not in df.columns:
-            continue
-        df = df[df["libtype"] == "opus"]
-        if df.empty:
-            continue
-        kids = _tune_df_kids(df)
-        if kids is None:
-            continue
-        for v in kids.dropna().tolist():
-            try:
-                csv_kids.add(int(v))
-            except (TypeError, ValueError):
-                continue
+    csv_kids = _collect_csv_kids(csv_paths, targets)
 
     sidecar_path = args.compiled_kids_sidecar or os.path.join(
         args.working_path, "compiled_kids.json"
@@ -1581,7 +1629,7 @@ if __name__ == "__main__":
     # Per-arch filter: drop kids whose arch_prefix is not in the target build set.
     _kid_arch = _kid_arch_common
 
-    target_arches = _build_target_arches()
+    target_arches = _build_target_arches(targets)
 
     if target_arches is not None:
         before = len(S)
@@ -1706,7 +1754,10 @@ if __name__ == "__main__":
             combined = pd.concat(combined_frames, ignore_index=True).drop_duplicates()
             tmp_csv = os.path.join(args.working_path, "_combined_opus_tuned.csv")
             combined.to_csv(tmp_csv, index=False)
-            tune_dict = get_tune_dict(tmp_csv)
+            more = f" (+{len(csv_paths) - 1} more)" if len(csv_paths) > 1 else ""
+            tune_dict = get_tune_dict(
+                tmp_csv, source=f"The opus rows of {csv_paths[0]}{more}"
+            )
             try:
                 os.remove(tmp_csv)
             except OSError:
