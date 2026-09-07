@@ -22,8 +22,8 @@ from packaging.version import Version, parse
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, f"{this_dir}/utils/")
-from build_targets import get_build_archs_env
-from chip_info import get_gfx, get_gfx_list, get_gfx_runtime
+from build_targets import get_build_archs_env, has_named_targets
+from chip_info import get_build_targets, get_gfx, get_gfx_list, get_gfx_runtime
 from cpp_extension import _jit_compile, executable_path, get_hip_version
 from file_baton import FileBaton
 from torch_guard import torch_compile_guard
@@ -726,6 +726,126 @@ def _so_offload_archs(so_path):
     return archs
 
 
+def _build_targets_stamp():
+    # Record the targets that actually drove codegen, including a live CU count
+    # when no explicit target was named. This prevents one shared JIT directory
+    # from reusing a same-arch module generated for a different SKU.
+    try:
+        targets = get_build_targets()
+    except RuntimeError:
+        if has_named_targets():
+            raise
+        return None
+    target_text = ";".join(
+        f"{gfx}:{cu_num}" for gfx, cu_num in sorted(set(targets))
+    )
+    archs = sorted({gfx for gfx, _ in targets})
+    try:
+        live_gfx = get_gfx_runtime()
+    except Exception:  # noqa: BLE001
+        primary = archs[-1] if archs else None
+    else:
+        primary = live_gfx if live_gfx in archs else (archs[-1] if archs else None)
+    return target_text if primary is None else f"{target_text}|primary={primary}"
+
+
+def _decode_targets_stamp(stamp):
+    if not stamp:
+        return frozenset(), None
+    target_text, _, metadata = stamp.partition("|")
+    primary = None
+    if metadata.startswith("primary="):
+        primary = metadata.removeprefix("primary=") or None
+    targets = set()
+    try:
+        for entry in target_text.split(";"):
+            gfx, cu_num = entry.split(":", 1)
+            targets.add((gfx, int(cu_num)))
+    except (TypeError, ValueError):
+        return None
+    return frozenset(targets), primary
+
+
+def _targets_stamp_path(md_name):
+    # Keep the sidecar adjacent to the extension for packaging, while matching
+    # the existing `*.so.*` ignore rule in developer checkouts.
+    return os.path.join(get_user_jit_dir(), f"{md_name}.so.build_targets")
+
+
+def _legacy_targets_stamp_path(md_name):
+    return os.path.join(get_user_jit_dir(), f"{md_name}.build_targets")
+
+
+def _write_targets_stamp(md_name):
+    path = _targets_stamp_path(md_name)
+    legacy_path = _legacy_targets_stamp_path(md_name)
+    stamp = _build_targets_stamp()
+    try:
+        if stamp is None:
+            if os.path.exists(path):
+                os.remove(path)
+        else:
+            with open(path, "w") as f:
+                f.write(stamp)
+        if os.path.exists(legacy_path):
+            os.remove(legacy_path)
+    except OSError:
+        pass
+
+
+def _needs_target_rebuild(md_name):
+    # The .so records its offload arches but not the CU counts it baked, so two
+    # builds of one arch at different CU counts are indistinguishable to
+    # _needs_arch_rebuild and the stale one imports silently.
+    current = _build_targets_stamp()
+    built = None
+    for path in (_targets_stamp_path(md_name), _legacy_targets_stamp_path(md_name)):
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path) as f:
+                built = f.read().strip()
+        except OSError:
+            return False
+        break
+
+    # An unstamped legacy module remains usable when the process did not make an
+    # explicit build request. If targets were explicitly named, preserve the
+    # previous safe behavior and rebuild because its CU coverage is unknowable.
+    if built is None:
+        return current is not None and has_named_targets()
+    if current is None:
+        # A prebuilt fat module remains valid on a GPU-less/AOT-only host even
+        # when the build-only variable is no longer exported.
+        return False
+
+    built_decoded = _decode_targets_stamp(built)
+    current_decoded = _decode_targets_stamp(current)
+    if built_decoded is not None and current_decoded is not None:
+        built_targets, built_primary = built_decoded
+        current_targets, current_primary = current_decoded
+        primary_matches = (
+            len({gfx for gfx, _ in built_targets}) <= 1
+            or built_primary == current_primary
+        )
+        if has_named_targets():
+            matches = built_targets == current_targets and primary_matches
+        else:
+            # With no build request, current is the live runtime target. A fat
+            # prebuilt module is valid when it contains that target and was
+            # generated with the same primary arch for scalar build decisions.
+            matches = current_targets.issubset(built_targets) and primary_matches
+        if matches:
+            return False
+
+    logger.warning(
+        f"[{md_name}] built for targets "
+        f"{built if built is not None else '(not recorded)'} but this process "
+        f"resolves {current}; rebuilding."
+    )
+    return True
+
+
 def _needs_arch_rebuild(md_name):
     # a prebuilt .so is a valid host extension on any GPU, so importing one
     # built for the wrong arch succeeds and only faults later at kernel launch.
@@ -750,7 +870,7 @@ def _needs_arch_rebuild(md_name):
 @functools.lru_cache(maxsize=1024)
 def get_module(md_name):
     check_numa()
-    if _needs_arch_rebuild(md_name):
+    if _needs_arch_rebuild(md_name) or _needs_target_rebuild(md_name):
         raise ModuleNotFoundError(md_name)
     get_module_custom_op(md_name)
     return __mds[md_name]
@@ -1110,6 +1230,7 @@ def build_module(
             )
             if is_python_module and not is_standalone:
                 shutil.copy(f"{opbd_dir}/{target_name}", f"{get_user_jit_dir()}")
+                _write_targets_stamp(md_name)
             else:
                 shutil.copy(
                     f"{opbd_dir}/{target_name}", f"{AITER_ROOT_DIR}/op_tests/cpp/mha"
@@ -1413,7 +1534,11 @@ def _ctypes_call(func, fc_name, md_name):
         if _cache:
             return
         so_path = os.path.join(get_user_jit_dir(), f"{md_name}.so")
-        if not os.path.exists(so_path) or _needs_arch_rebuild(md_name):
+        if (
+            not os.path.exists(so_path)
+            or _needs_arch_rebuild(md_name)
+            or _needs_target_rebuild(md_name)
+        ):
             d_args = _prepare_ctypes_build_args(md_name)
             build_module(
                 md_name,

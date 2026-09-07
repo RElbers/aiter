@@ -29,6 +29,7 @@ import os
 import sys
 import tempfile
 import textwrap
+from unittest import mock
 
 # Ensure the repo-local aiter is imported, not any system/site-packages install.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -289,6 +290,174 @@ def test_opus_bakes_both_skus():
                 os.environ[name] = val
             elif name in os.environ:
                 del os.environ[name]
+
+
+def test_runtime_arch_and_cache_identity():
+    _section("1f. runtime arch and cache identity")
+
+    from aiter.jit import core
+    from aiter.jit.utils import chip_info
+    from aiter.ops.opus._arch import _detect_arch
+
+    env_names = ("AITER_GPU_TARGETS", "GPU_ARCHS", "CU_NUM")
+    original = {name: os.environ.pop(name, None) for name in env_names}
+    try:
+        os.environ["AITER_GPU_TARGETS"] = "gfx950:256;gfx942:304"
+        with mock.patch.object(chip_info, "_detect_native", return_value=["gfx942"]):
+            chip_info.get_gfx_custom_op_core.cache_clear()
+            detected = chip_info.GFX_MAP[chip_info.get_gfx_custom_op_core()]
+            _check(
+                "multi-target runtime dispatch uses the live named arch",
+                detected == "gfx942",
+                detected,
+            )
+
+        opus_flag_sets = []
+        for target_spec in (
+            "gfx1250:256;gfx950:256",
+            "gfx950:256;gfx1250:256",
+        ):
+            os.environ["AITER_GPU_TARGETS"] = target_spec
+            core.get_gfx_list.cache_clear()
+            opus_flag_sets.append(
+                {
+                    flag
+                    for flag in core.get_args_of_build("module_deepgemm_opus")[
+                        "flags_extra_hip"
+                    ]
+                    if flag
+                }
+            )
+        required_flags = {
+            "-mllvm -amdgpu-expert-scheduling-mode",
+            "-mllvm -enable-post-misched=1",
+        }
+        _check(
+            "gfx1250 OPUS flags use target membership, independent of order",
+            all(required_flags <= flags for flags in opus_flag_sets),
+            str(opus_flag_sets),
+        )
+
+        os.environ["AITER_GPU_TARGETS"] = "gfx942:304"
+        os.environ["GPU_ARCHS"] = "gfx950"
+        ok_950, _ = _detect_arch({"gfx950"})
+        ok_942, _ = _detect_arch({"gfx942"})
+        _check(
+            "authoritative AITER_GPU_TARGETS is not unioned with GPU_ARCHS",
+            not ok_950 and ok_942,
+            f"gfx950={ok_950}, gfx942={ok_942}",
+        )
+        hybrid_args = core._prepare_ctypes_build_args("module_top_k_per_row")
+        pure_args = core._prepare_ctypes_build_args("module_attention_asm")
+        _check(
+            "ctypes rebuild preserves pybind support for hybrid modules",
+            not hybrid_args["torch_exclude"] and pure_args["torch_exclude"],
+            (
+                f"hybrid={hybrid_args['torch_exclude']} "
+                f"pure={pure_args['torch_exclude']}"
+            ),
+        )
+
+        with tempfile.NamedTemporaryFile("w", delete=False) as stamp_file:
+            stamp_file.write("gfx950:256;gfx950:128")
+            stamp_path = stamp_file.name
+        try:
+            with (
+                mock.patch.object(
+                    core, "_targets_stamp_path", return_value=stamp_path
+                ),
+                mock.patch.object(
+                    core, "_build_targets_stamp", return_value="gfx950:128;gfx950:256"
+                ),
+                mock.patch.object(core, "has_named_targets", return_value=True),
+            ):
+                _check(
+                    "target stamp comparison ignores order",
+                    not core._needs_target_rebuild("module_test"),
+                )
+            with (
+                mock.patch.object(
+                    core, "_targets_stamp_path", return_value=f"{stamp_path}.new"
+                ),
+                mock.patch.object(
+                    core, "_legacy_targets_stamp_path", return_value=stamp_path
+                ),
+                mock.patch.object(
+                    core, "_build_targets_stamp", return_value="gfx950:64"
+                ),
+                mock.patch.object(core, "has_named_targets", return_value=False),
+            ):
+                _check(
+                    "legacy staged stamp path still prevents wrong-CU reuse",
+                    core._needs_target_rebuild("module_test"),
+                )
+            with (
+                mock.patch.object(
+                    core, "_targets_stamp_path", return_value=stamp_path
+                ),
+                mock.patch.object(
+                    core,
+                    "_build_targets_stamp",
+                    return_value="gfx950:128|primary=gfx950",
+                ),
+                mock.patch.object(core, "has_named_targets", return_value=False),
+            ):
+                _check(
+                    "fat prebuilt stamp accepts its live target subset",
+                    not core._needs_target_rebuild("module_test"),
+                )
+            with (
+                mock.patch.object(
+                    core, "_targets_stamp_path", return_value=stamp_path
+                ),
+                mock.patch.object(
+                    core, "_build_targets_stamp", return_value="gfx950:64"
+                ),
+                mock.patch.object(core, "has_named_targets", return_value=False),
+            ):
+                _check(
+                    "same-arch unknown CU invalidates a stamped module",
+                    core._needs_target_rebuild("module_test"),
+                )
+            with (
+                mock.patch.object(
+                    core, "_targets_stamp_path", return_value=stamp_path
+                ),
+                mock.patch.object(core, "_build_targets_stamp", return_value=None),
+                mock.patch.object(core, "has_named_targets", return_value=False),
+            ):
+                _check(
+                    "unsetting build-only targets does not invalidate a prebuilt module",
+                    not core._needs_target_rebuild("module_test"),
+                )
+            with open(stamp_path, "w") as f:
+                f.write("gfx942:304;gfx950:256|primary=gfx950")
+            with (
+                mock.patch.object(
+                    core, "_targets_stamp_path", return_value=stamp_path
+                ),
+                mock.patch.object(
+                    core,
+                    "_build_targets_stamp",
+                    return_value="gfx942:304;gfx950:256|primary=gfx942",
+                ),
+                mock.patch.object(core, "has_named_targets", return_value=False),
+            ):
+                _check(
+                    "fat-module stamp includes host-dependent primary arch",
+                    core._needs_target_rebuild("module_test"),
+                )
+        finally:
+            os.unlink(stamp_path)
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        chip_info.get_gfx_custom_op_core.cache_clear()
+        chip_info.get_gfx.cache_clear()
+        core.get_gfx_list.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -1036,6 +1205,7 @@ def test_build_tune_dict_strict_unknown_kernel():
 if __name__ == "__main__":
     test_get_build_targets()
     test_opus_bakes_both_skus()
+    test_runtime_arch_and_cache_identity()
     test_gen_instances_filter(
         csv_path=REPRO_CSV,
         target_a=TARGET_C,
