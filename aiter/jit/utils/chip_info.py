@@ -7,10 +7,12 @@ import re
 import subprocess
 
 from build_targets import (
+    GFX_CU_NUM_MAP,
     GFX_MAP,
     _parse_gpu_archs_env,
     _parse_gpu_targets_env,
     filter_tune_df,
+    get_build_archs_env,
     get_build_targets_env,
 )
 from cpp_extension import executable_path
@@ -45,15 +47,31 @@ def get_gfx_custom_op() -> int:
 
 @functools.lru_cache(maxsize=10)
 def get_gfx_custom_op_core() -> int:
-    gfx = os.getenv("GPU_ARCHS", "native")
+    named = get_build_archs_env()
+    gfx = named[-1] if named else os.getenv("GPU_ARCHS", "native")
+    if named and len(named) > 1:
+        # A build target list is not a runtime dispatch order. When this code is
+        # running on one of the named devices, use the live arch rather than an
+        # arbitrary list element. Keep the deterministic final entry only for a
+        # GPU-less cross-build host, where no runtime identity exists.
+        try:
+            live_gfx = _detect_native()[0]
+        except RuntimeError:
+            gfx = max(named)
+        else:
+            if live_gfx in named:
+                gfx = live_gfx
     gfx_mapping = {v: k for k, v in GFX_MAP.items()}
     if gfx == "native":
         gfx = _detect_native()[0]
     elif ";" in gfx:
-        # TODO: multi-arch GPU_ARCHS (e.g. "gfx942;gfx950") -- picking the
-        # last entry is a known limitation for build-time codegen callers.
-        # For runtime dispatch, prefer get_gfx_runtime().
-        gfx = gfx.split(";")[-1]
+        archs = _parse_gpu_archs_env(gfx)
+        try:
+            live_gfx = _detect_native()[0]
+        except RuntimeError:
+            gfx = max(archs)
+        else:
+            gfx = live_gfx if live_gfx in archs else max(archs)
     try:
         return gfx_mapping[gfx]
     except KeyError:
@@ -123,14 +141,16 @@ def gfx_from_cu_num(cu_num) -> str:
 @functools.lru_cache(maxsize=1)
 def get_gfx_list() -> list[str]:
 
-    gfx_env = os.getenv("GPU_ARCHS", "native")
-    if gfx_env == "native":
-        try:
-            gfxs = _detect_native()
-        except RuntimeError:
-            gfxs = ["cpu"]
-    else:
-        gfxs = _parse_gpu_archs_env(gfx_env)
+    gfxs = get_build_archs_env()
+    if gfxs is None:
+        gfx_env = os.getenv("GPU_ARCHS", "native")
+        if gfx_env == "native":
+            try:
+                gfxs = _detect_native()
+            except RuntimeError:
+                gfxs = ["cpu"]
+        else:
+            gfxs = _parse_gpu_archs_env(gfx_env)
     os.environ["AITER_GPU_ARCHS"] = ";".join(gfxs)
 
     return gfxs
@@ -178,7 +198,11 @@ def get_build_targets() -> list[tuple[str, int]]:
       1. AITER_GPU_TARGETS set -> delegate to get_build_targets_env(), which
          reads it as (gfx, cu_num) pairs.
       2. GPU_ARCHS set to an explicit non-empty target list -> delegate to
-         get_build_targets_env() (no GPU needed).
+         get_build_targets_env() (no GPU needed), then replace the
+         GFX_CU_NUM_MAP default with the live device's CU count for the arch
+         that matches it. GPU_ARCHS carries no CU count, so without that step a
+         build on a binned (MI308X) or partitioned (DPX/CPX) part would drop
+         every tuned row for the machine it is running on.
       3. GPU_ARCHS unset, empty/whitespace, or "native" -> call get_gfx()
          (GPU_ARCHS-aware; falls back to rocminfo when GPU_ARCHS is unset) and
          get_cu_num(), which correctly reflect partition mode and binned variants.
@@ -191,7 +215,19 @@ def get_build_targets() -> list[tuple[str, int]]:
     gpu_archs = os.getenv("GPU_ARCHS")
     gpu_archs_normalized = gpu_archs.strip() if gpu_archs is not None else ""
     if gpu_archs_normalized and gpu_archs_normalized.lower() != "native":
-        return get_build_targets_env()
+        targets = get_build_targets_env()
+        if os.getenv("CU_NUM"):
+            return targets
+        try:
+            live_gfx, live_cu = get_gfx_runtime(), get_cu_num()
+        except Exception:  # noqa: BLE001 — no live GPU: keep the map defaults
+            return targets
+        return [
+            (gfx, live_cu)
+            if gfx == live_gfx and cu == GFX_CU_NUM_MAP.get(gfx)
+            else (gfx, cu)
+            for gfx, cu in targets
+        ]
 
     try:
         # get_gfx() is intentional here -- this is a build-time path; get_gfx_runtime()
@@ -202,6 +238,10 @@ def get_build_targets() -> list[tuple[str, int]]:
             "No GPU detected and GPU_ARCHS is not set to an explicit target. "
             "Set GPU_ARCHS=gfx942 (or similar) to build without a GPU."
         ) from e
+
+
+def _tune_source(libtype):
+    return f"The libtype={libtype!r} rows of the tuned CSV" if libtype else ""
 
 
 def build_tune_dict(
@@ -238,9 +278,12 @@ def build_tune_dict(
     """
     tune_dict = dict(default_dict)
     targets = get_build_targets()
-    filtered = filter_tune_df(tune_df, targets)
+    filtered = tune_df
     if libtype is not None and "libtype" in tune_df.columns:
         filtered = filtered[filtered["libtype"] == libtype]
+    # After the libtype filter, so the unmatched-target warning reflects the rows
+    # this module would actually have used.
+    filtered = filter_tune_df(filtered, targets, source=_tune_source(libtype))
     use_name = kernels_by_name is not None and "kernelName" in tune_df.columns
     if kernels_by_name is not None and not use_name:
         logger.warning(
@@ -307,9 +350,10 @@ def build_tune_dict_batched(tune_df, default_dict, kernels_list, libtype=None):
     """
     tune_dict = dict(default_dict)
     targets = get_build_targets()
-    filtered = filter_tune_df(tune_df, targets)
+    filtered = tune_df
     if libtype is not None and "libtype" in tune_df.columns:
         filtered = filtered[filtered["libtype"] == libtype]
+    filtered = filter_tune_df(filtered, targets, source=_tune_source(libtype))
     bad_rows: list[str] = []
     for _, row in filtered.iterrows():
         key = (
