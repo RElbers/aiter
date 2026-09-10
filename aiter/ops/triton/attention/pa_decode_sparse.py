@@ -241,7 +241,9 @@ def pa_decode_sparse(
     # arches use the synchronous slot path, where 32 exposes memory latency.
     # Workgroup budget in waves of the device, not a fixed count: a smaller
     # block_h leaves more occupancy per CU, so the budget is a multiple of it.
-    num_cus = max(1, get_num_sms())
+    # Capped at the 256 this was tuned under: going below it suits a smaller
+    # part, going above it on gfx942 is a change nothing has measured.
+    num_cus = max(1, min(get_num_sms(), 256))
     if use_gluon:
         block_k = 16
         waves_per_eu = 1
