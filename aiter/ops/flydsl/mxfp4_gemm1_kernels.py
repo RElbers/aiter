@@ -6,6 +6,7 @@ import functools
 
 import torch
 
+from aiter.jit.utils.chip_info import get_num_xcds
 from aiter.ops.flydsl import moe_kernels as _moe_kernels
 
 _SUPPORTED = {
@@ -30,6 +31,7 @@ def _get_compiled_mxfp4_gemm1_port(
     BK,
     interleave=False,
     xcd_swizzle=0,
+    num_xcds=8,
 ):
     from .kernels.mxfp4_gemm1 import compile_gemm1_a4w4_port
 
@@ -45,6 +47,7 @@ def _get_compiled_mxfp4_gemm1_port(
         BK=BK,
         interleave=interleave,
         xcd_swizzle=xcd_swizzle,
+        num_xcds=num_xcds,
     )
 
 
@@ -118,6 +121,7 @@ def flydsl_mxfp4_gemm1(
         BK,
         interleave,
         xcd_swizzle,
+        get_num_xcds(),
     )
     grid = gemm1_grid(n_tokens, BM, NE=NE, TOPK=topk, INTER=D_INTER, BN=BN)
     _moe_kernels._run_compiled(
