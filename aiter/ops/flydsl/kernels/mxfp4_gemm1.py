@@ -785,6 +785,7 @@ def compile_gemm1_a4w4_port(
     BK=256,
     interleave=False,
     xcd_swizzle=0,
+    num_xcds: int = 8,
 ):
     if (BM, use_nt, inline_quant) not in {
         (32, True, False),
@@ -819,6 +820,8 @@ def compile_gemm1_a4w4_port(
     name_suffix = f"h{_K}_i{_INTER}_ne{_NE}_bm{BM}_{variant_tag}_{gu_tag}"
     if xcd_swizzle > 0:
         name_suffix += f"_xcd{xcd_swizzle}"
+        if num_xcds != 8:
+            name_suffix += f"_nxcd{num_xcds}"
 
     @fx.struct
     class SharedStorage:
@@ -849,7 +852,7 @@ def compile_gemm1_a4w4_port(
         total_m_blocks = cumsum0 // fx.Int32(BM)
         bound = total_m_blocks * fx.Int32(_NUM_N_BLOCKS)
 
-        _NXCD = 8
+        _NXCD = num_xcds
         _xq = _udiv(bound, _NXCD)
         _xr = _umod(bound, _NXCD)
         _SW = xcd_swizzle

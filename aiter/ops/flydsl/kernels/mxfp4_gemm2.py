@@ -95,6 +95,7 @@ def compile_gemm2_a4w4_port(
     BN=256,
     BK=256,
     xcd_swizzle=0,
+    num_xcds: int = 8,
 ):
     assert BN == 256 and BK == 256, f"only BN==BK==256 supported, got BN={BN} BK={BK}"
     KH_TILE = BK // 2
@@ -131,6 +132,10 @@ def compile_gemm2_a4w4_port(
     _tag = f"ne{NE}_h{N_OUT}_i{_K}{_rtag}_bm{BM}{'_nt' if use_nt else ''}_{_epi_tag}"
     if xcd_swizzle > 0:
         _tag += f"_xcd{xcd_swizzle}"
+    # The round-robin below runs whatever xcd_swizzle is, so the count belongs in
+    # the cache key even at 0. Omitted at 8 to keep the names already on disk.
+    if num_xcds != 8:
+        _tag += f"_nxcd{num_xcds}"
     _name = f"gemm2_a4w4_port_{_tag}"
 
     @fx.struct
@@ -221,7 +226,7 @@ def compile_gemm2_a4w4_port(
             bound = total_m_blocks * fx.Int32(_num_n_blocks)
             grid_nb = fx.Int32(gpu.grid_dim.x)
 
-            _NXCD = 8
+            _NXCD = num_xcds
             _xq = _udiv(bound, _NXCD)
             _xr = _umod(bound, _NXCD)
             _SW = xcd_swizzle
