@@ -310,6 +310,7 @@ def compile_gemm2_a16w4_port(
     TILE_N=256,
     TILE_K=256,
     xcd_swizzle=1,
+    num_xcds: int = 8,
     b_cache_mod=2,
     waves_per_eu=None,
     w_dtype="fp4",
@@ -321,9 +322,9 @@ def compile_gemm2_a16w4_port(
     N_OUT = model_dim (down-proj output). D_INTER = inter_dim (contraction). Output
     bf16 [tokens, model_dim] via atomic (routing-weighted) scatter.
 
-    ``xcd_swizzle`` (>0) bijectively round-robins the launch index across the 8 XCDs to
-    balance per-XCD/HBM traffic (gemm2 is HBM-bound), + optional M-group swizzle for
-    per-XCD L2 locality (group = xcd_swizzle m-blocks).
+    The launch index is bijectively round-robined across ``num_xcds`` XCDs to balance
+    per-XCD/HBM traffic (gemm2 is HBM-bound); ``xcd_swizzle`` (>0) adds an M-group
+    swizzle for per-XCD L2 locality (group = xcd_swizzle m-blocks).
     """
     assert w_dtype in (
         "fp4",
@@ -363,6 +364,10 @@ def compile_gemm2_a16w4_port(
         _name += f"_bcm{b_cache_mod}"
     if xcd_swizzle > 0:
         _name += f"_xcd{xcd_swizzle}"
+    # The round-robin below runs whatever xcd_swizzle is, so the count belongs in
+    # the cache key even at 0. Omitted at 8 to keep the names already on disk.
+    if num_xcds != 8:
+        _name += f"_nxcd{num_xcds}"
     if waves_per_eu:
         _name += f"_w{waves_per_eu}"
     if persist:
@@ -396,7 +401,7 @@ def compile_gemm2_a16w4_port(
 
         # Bijective XCD round-robin over valid tiles [0, bound) to balance per-XCD/HBM
         # traffic; xcd_swizzle>0 also M-group-swizzles for per-XCD L2 locality.
-        _NXCD = 8
+        _NXCD = num_xcds
         _xq = _udiv(bound, _NXCD)
         _xr = _umod(bound, _NXCD)
         _SW = xcd_swizzle
