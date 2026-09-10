@@ -65,6 +65,9 @@ def _cap_grid_dim_to_device(config: dict) -> dict:
     GRID_DIM is a persistent grid, and each arch's config carries that arch's
     largest SKU. A smaller SKU of the same arch would launch CTAs it has no
     cores for and start the work-stealing counter above its own parallelism.
+
+    Only applied to a config the caller did not override, so an explicit
+    grid_dim= stays exactly what was asked for.
     """
     num_cus = get_num_sms()
     if num_cus <= 0 or config["GRID_DIM"] <= num_cus:
@@ -261,8 +264,8 @@ def gmm(
         # the override into subsequent calls.
         config = dict(config)
         config["GRID_DIM"] = grid_dim
-
-    config = _cap_grid_dim_to_device(config)
+    else:
+        config = _cap_grid_dim_to_device(config)
 
     grid = _gmm_grid(
         N,
@@ -474,8 +477,8 @@ def ptgmm(
         # the override into subsequent calls.
         config = dict(config)
         config["GRID_DIM"] = grid_dim
-
-    config = _cap_grid_dim_to_device(config)
+    else:
+        config = _cap_grid_dim_to_device(config)
 
     # Bias gradient handling.
     # -----------------------
