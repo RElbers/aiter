@@ -9,6 +9,7 @@ from flydsl.expr import arith, const_expr, gpu, range_constexpr, rocdl
 from flydsl.expr.typing import T
 from flydsl.expr.typing import Vector as Vec
 
+from aiter.jit.utils.chip_info import get_cu_num
 from aiter.ops.flydsl.kernels.mxfp4_gemm_common import (
     global_typed_ptr,
     lds_typed_ptr,
@@ -25,9 +26,10 @@ from .utils import (
     make_b_loader,
 )
 
-# gfx950 CU count; caps the persistent gemm2 grid so high-expert launches (E896) do
-# not over-launch ~max_m_blocks empty CTAs.
-NUM_CU = 256
+# Fallback CU count for the persistent gemm2 grid cap, which keeps a high-expert
+# launch (E896) from over-launching ~max_m_blocks empty CTAs. Used only when the
+# caller names no count and the device cannot be asked.
+DEFAULT_NUM_CU = 256
 
 
 # @flyc.jit is LOAD-BEARING: it AST-rewrites ``if token_id < i32_M`` into an scf.if.
@@ -287,16 +289,26 @@ def _gemm2_body_a16w4(
     )
 
 
-def gemm2_a16w4_grid(BM, *, N_OUT, TILE_N, max_m_blocks, persist=False):
+def gemm2_a16w4_grid(BM, *, N_OUT, TILE_N, max_m_blocks, persist=False, num_cu=None):
     """Flattened launch grid for a16w4 gemm2.
 
     Non-persistent (default): one CTA per (m-block x n-block) tile over padded
-    ``max_m_blocks``. Persistent: cap to ``min(total_work, NUM_CU)`` CTAs (only when
-    padded work > ``NUM_CU*4``); each CTA loops over its real work-tiles.
+    ``max_m_blocks``. Persistent: cap to ``min(total_work, num_cu)`` CTAs (only when
+    padded work > ``num_cu*4``); each CTA loops over its real work-tiles.
+
+    ``num_cu`` defaults to the running device's CU count. The grid is a host-side
+    launch decision, so it is not baked into the kernel and needs no cache key.
     """
     total_work = int(max_m_blocks) * (N_OUT // TILE_N)
-    if persist and total_work > NUM_CU * 4:
-        return min(total_work, NUM_CU)
+    if not persist:
+        return total_work
+    if num_cu is None:
+        try:
+            num_cu = get_cu_num()
+        except Exception:  # noqa: BLE001
+            num_cu = DEFAULT_NUM_CU
+    if total_work > num_cu * 4:
+        return min(total_work, num_cu)
     return total_work
 
 
