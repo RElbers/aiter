@@ -129,6 +129,7 @@ def flydsl_mxfp4_gemm2(
     BN=256,
     BK=256,
     xcd_swizzle=0,
+    num_xcds=None,
     stream=None,
 ):
     _assert_supported(
@@ -156,7 +157,7 @@ def flydsl_mxfp4_gemm2(
         BN,
         BK,
         xcd_swizzle,
-        get_num_xcds(),
+        get_num_xcds() if num_xcds is None else num_xcds,
     )
 
     max_m_blocks = (max_sorted + BM - 1) // BM

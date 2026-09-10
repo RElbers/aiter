@@ -18,7 +18,12 @@ import os
 import sys
 import time
 
-from aiter.aot.flydsl.common import collect_aot_jobs, compile_only_env, override_env
+from aiter.aot.flydsl.common import (
+    collect_aot_jobs,
+    compile_only_env,
+    override_env,
+    target_num_xcds,
+)
 from aiter.jit.core import AITER_CONFIGS, AITER_ROOT_DIR
 
 _MODEL_CONFIG_DIR = f"{AITER_ROOT_DIR}/aiter/configs/model_configs"
@@ -73,6 +78,7 @@ def _job_key(job: dict) -> tuple:
             job["NE"],
             job["topk"],
             job["xcd_swizzle"],
+            target_num_xcds("gfx950", job["cu_num"]),
         )
     return (
         2,
@@ -84,6 +90,7 @@ def _job_key(job: dict) -> tuple:
         job["D_INTER"],
         job["D_INTER_REAL"],
         job["xcd_swizzle"],
+        target_num_xcds("gfx950", job["cu_num"]),
     )
 
 
@@ -247,6 +254,7 @@ def _compile_stage1(job):
         D_INTER=job["D_INTER"],
         topk=job["topk"],
         xcd_swizzle=job["xcd_swizzle"],
+        num_xcds=target_num_xcds("gfx950", job["cu_num"]),
         stream=0,
     )
 
@@ -281,6 +289,7 @@ def _compile_stage2(job):
         cshuffle=epilog == "nonatomic_cshuffle",
         D_INTER_REAL=job["D_INTER_REAL"],
         xcd_swizzle=job["xcd_swizzle"],
+        num_xcds=target_num_xcds("gfx950", job["cu_num"]),
         stream=0,
     )
 
