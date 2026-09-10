@@ -231,7 +231,8 @@ def reduce_scatter(
 
     # Launch kernel
     if num_sms is None:
-        num_sms = get_num_sms()
+        # Capped at the 256 this default carried, so only a smaller part moves.
+        num_sms = min(get_num_sms(), 256)
     grid = (num_sms,)
     _reduce_scatter_kernel[grid](
         input_tensor,
