@@ -94,6 +94,7 @@ def flydsl_mxfp4_gemm1(
     BK=256,
     interleave=False,
     xcd_swizzle=0,
+    num_xcds=None,
     stream=None,
 ):
     _assert_supported(
@@ -121,7 +122,7 @@ def flydsl_mxfp4_gemm1(
         BK,
         interleave,
         xcd_swizzle,
-        get_num_xcds(),
+        get_num_xcds() if num_xcds is None else num_xcds,
     )
     grid = gemm1_grid(n_tokens, BM, NE=NE, TOPK=topk, INTER=D_INTER, BN=BN)
     _moe_kernels._run_compiled(

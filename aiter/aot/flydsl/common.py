@@ -59,6 +59,25 @@ def cu_num_to_arch(cu_num: int, default: str = "gfx950") -> str:
     return _CU_NUM_TO_ARCH.get(cu_num, default)
 
 
+# Parts whose die count is not the eight this repo assumed before it was asked.
+# A build host is not the target, so an AOT job takes the count from the target
+# it names rather than from the device running the build.
+_TARGET_NUM_XCDS = {
+    ("gfx950", 128): 4,
+}
+
+DEFAULT_NUM_XCDS = 8
+
+
+def target_num_xcds(gfx: str, cu_num: int, default: int = DEFAULT_NUM_XCDS) -> int:
+    """XCD count of the part a job compiles for, keyed by (gfx, cu_num).
+
+    Unlisted targets keep the default, which is what every kernel baked before
+    the count became a parameter.
+    """
+    return _TARGET_NUM_XCDS.get((gfx, int(cu_num)), default)
+
+
 def job_identity(job: dict[str, Any]) -> tuple:
     return tuple(sorted(job.items()))
 
