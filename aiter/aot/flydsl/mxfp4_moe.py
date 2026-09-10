@@ -25,6 +25,7 @@ from aiter.aot.flydsl.common import (
     target_num_xcds,
 )
 from aiter.jit.core import AITER_CONFIGS, AITER_ROOT_DIR
+from aiter.ops.flydsl.kernels.mxfp4_gemm2 import DEFAULT_NUM_CU
 
 _MODEL_CONFIG_DIR = f"{AITER_ROOT_DIR}/aiter/configs/model_configs"
 # moe.py defers every ``flydsl_moe2_layout_`` name to this module, so a CSV the
@@ -91,6 +92,7 @@ def _job_key(job: dict) -> tuple:
         job["D_INTER_REAL"],
         job["xcd_swizzle"],
         target_num_xcds("gfx950", job["cu_num"]),
+        job["cu_num"] or DEFAULT_NUM_CU,
     )
 
 
@@ -290,6 +292,7 @@ def _compile_stage2(job):
         D_INTER_REAL=job["D_INTER_REAL"],
         xcd_swizzle=job["xcd_swizzle"],
         num_xcds=target_num_xcds("gfx950", job["cu_num"]),
+        num_cu=job["cu_num"] or DEFAULT_NUM_CU,
         stream=0,
     )
 
