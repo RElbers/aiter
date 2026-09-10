@@ -63,7 +63,9 @@ def cu_num_to_arch(cu_num: int, default: str = "gfx950") -> str:
 # A build host is not the target, so an AOT job takes the count from the target
 # it names rather than from the device running the build.
 _TARGET_NUM_XCDS = {
-    ("gfx950", 128): 4,
+    ("gfx950", 128): 4,  # MI350P, against 8 on MI350X and MI355X
+    ("gfx942", 80): 4,  # MI308X, against 8 on MI300X and MI325X
+    ("gfx942", 228): 6,  # MI300A
 }
 
 DEFAULT_NUM_XCDS = 8
