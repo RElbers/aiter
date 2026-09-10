@@ -59,6 +59,7 @@ from flydsl.expr.rocdl import tdm_ops
 from flydsl.expr.typing import T
 from flydsl.utils.smem_allocator import SmemAllocator
 
+from aiter.jit.utils.chip_info import get_num_xcds
 from aiter.ops.flydsl.kernels import buffer_ops, vector
 
 from ..tensor_shim import _run_compiled
@@ -744,8 +745,10 @@ def _load_initial_kv_tiles(ty, kv_lds_addrs, blk, su):
 
 
 @functools.cache
-def compile_fmha_fwd(*, is_causal: bool = False, return_lse: bool = False):
-    """Compile FMHA kernel variant. Cached per (is_causal, return_lse)."""
+def compile_fmha_fwd(
+    *, is_causal: bool = False, return_lse: bool = False, num_xcds: int = 8
+):
+    """Compile FMHA kernel variant. Cached per (is_causal, return_lse, num_xcds)."""
     IS_CAUSAL = int(is_causal)
     RETURN_LSE = int(return_lse)
 
@@ -815,9 +818,9 @@ def compile_fmha_fwd(*, is_causal: bool = False, return_lse: bool = False):
         # Software XCD remap (HipKittens style):
         #   flat wgid = raw_x + gdx*(raw_y + gdy*raw_z)
         # This converts hardware round-robin XCD assignment to chunked assignment:
-        #   XCD i gets wgids [i*(NUM_WGS/8) .. (i+1)*(NUM_WGS/8)-1]
+        #   XCD i gets wgids [i*(NUM_WGS/n) .. (i+1)*(NUM_WGS/n)-1]
         # → workgroups with nearby new_wgid share the same XCD → K/V cache locality.
-        _NUM_XCDS = arith.constant(8, type=T.i32)
+        _NUM_XCDS = arith.constant(num_xcds, type=T.i32)
         _raw_bx = arith.index_cast(T.i32, gpu.block_id("x"))  # raw batch
         _raw_by = arith.index_cast(T.i32, gpu.block_id("y"))  # raw m-block
         _raw_bz = arith.index_cast(T.i32, gpu.block_id("z"))  # raw head
@@ -3217,7 +3220,7 @@ BLOCK_M = 128
 KV_TILE_N = 128
 BPP = 2  # bytes per element (bf16)
 
-_launch_fns = {}  # {(is_causal, return_lse): launch_fn}
+_launch_fns = {}  # {(is_causal, return_lse, num_xcds): launch_fn}
 
 
 def _patch_reusable_slot_specs():
@@ -3244,14 +3247,16 @@ def _patch_reusable_slot_specs():
         Float64._reusable_ctype = ctypes.c_double
 
 
-def _ensure_kernel(is_causal: bool, return_lse: bool = False):
-    key = (is_causal, return_lse)
+def _ensure_kernel(is_causal: bool, return_lse: bool = False, num_xcds: int = 8):
+    key = (is_causal, return_lse, num_xcds)
     if key in _launch_fns:
         return
 
     _patch_reusable_slot_specs()
 
-    kernel = compile_fmha_fwd(is_causal=is_causal, return_lse=return_lse)
+    kernel = compile_fmha_fwd(
+        is_causal=is_causal, return_lse=return_lse, num_xcds=num_xcds
+    )
 
     @flyc.jit
     def _launch(
@@ -3383,10 +3388,11 @@ def flash_attn_varlen_d192_gfx1250(
     stride_v_head = v.stride(1) * BPP
     stride_o_head = out.stride(1)
 
-    _ensure_kernel(bool(causal), bool(return_lse))
+    num_xcds = get_num_xcds()
+    _ensure_kernel(bool(causal), bool(return_lse), num_xcds)
 
     _run_compiled(
-        _launch_fns[(bool(causal), bool(return_lse))],
+        _launch_fns[(bool(causal), bool(return_lse), num_xcds)],
         out,
         q,
         k,
