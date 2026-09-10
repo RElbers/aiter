@@ -6,6 +6,7 @@ import torch
 from aiter.ops.triton._triton_kernels.quant.quant import (
     pod_persistent,
 )
+from aiter.ops.triton.utils.device_info import get_num_sms
 from aiter.ops.triton.utils.logger import AiterTritonLogger
 
 _LOGGER = AiterTritonLogger()
@@ -114,7 +115,17 @@ def pod_attention(
     # Each CU gets 2 WGs -- one doing decode and one prefill -- so the caller passes
     # 2x the CU count, and this halves it back to the per-CU slot count the kernel
     # folds program ids by.
+    assert (
+        total_programs > 0 and total_programs % 2 == 0
+    ), f"total_programs must be a positive even number, got {total_programs}."
     total_wgs = total_programs // 2
+    expected = 2 * get_num_sms()
+    if total_programs != expected:
+        _LOGGER.warning(
+            f"pod_attention: total_programs={total_programs} is not 2x this "
+            f"device's CU count ({expected}); the kernel folds program ids by "
+            f"{total_wgs}, so slots per CU will not be 2."
+        )
 
     (
         num_m_blocks,
