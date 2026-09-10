@@ -22,6 +22,7 @@ from aiter.ops.triton._triton_kernels.gmm import (
     tgmm_non_persistent_kernel,
     tgmm_persistent_kernel,
 )
+from aiter.ops.triton.utils.device_info import get_num_xcds
 
 # AITER: GMM utility functions
 from aiter.ops.triton.utils.gmm_common import (
@@ -269,6 +270,7 @@ def gmm(
         USE_BIAS=use_bias,
         WORK_STEALING=work_stealing,
         **config,
+        NUM_XCDS=get_num_xcds(),
     )
     # fmt: on
 
@@ -487,6 +489,7 @@ def ptgmm(
         COMPUTE_BIAS_GRAD=compute_bias_grad,
         ACCUMULATE=accumulate,
         **config,
+        NUM_XCDS=get_num_xcds(),
     )
     # fmt: on
 
@@ -682,6 +685,7 @@ def nptgmm(
         COMPUTE_BIAS_GRAD=compute_bias_grad,
         ACCUMULATE=accumulate,
         **config,
+        NUM_XCDS=get_num_xcds(),
     )
     # fmt: on
 

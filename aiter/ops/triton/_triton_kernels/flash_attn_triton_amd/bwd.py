@@ -5,6 +5,8 @@ import torch
 import triton
 import triton.language as tl
 
+from aiter.ops.triton.utils.device_info import get_num_xcds
+
 from .utils import (
     AUTOTUNE,
     DEBUG,
@@ -4772,7 +4774,7 @@ def attention_backward_triton_impl(
         seqlen = max(max_seqlen_q, max_seqlen_k)
 
         arch = get_arch()
-        num_xcd = 1 if arch.is_rdna else 8
+        num_xcd = 1 if arch.is_rdna else get_num_xcds()
 
         def grid(META):
             return (
