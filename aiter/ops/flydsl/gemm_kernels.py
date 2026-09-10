@@ -15,7 +15,7 @@ from flydsl.runtime.device import get_rocm_arch
 from torch import Tensor
 
 from aiter import logger
-from aiter.jit.utils.chip_info import get_gfx, get_lds_capacity_bytes
+from aiter.jit.utils.chip_info import get_gfx, get_lds_capacity_bytes, get_num_xcds
 from aiter.ops.flydsl.kernels.tensor_shim import ptr_arg
 
 from .kernels.hgemm_dispatch import compile_flydsl_hgemm_kernel
@@ -1082,6 +1082,7 @@ def flydsl_preshuffle_gemm_a8(
         waves_per_eu=wpe,
         enable_scheduler=bool(enable_scheduler),
         xcd_swizzle=int(xcd_swizzle),
+        num_xcds=get_num_xcds(),
         lds_stage=int(lds_stage),
         split_k=int(split_k),
     )

@@ -22,6 +22,7 @@ Launch args are raw device pointers (``fx.Int64``); tensors passed as
 import torch
 from flydsl.runtime.device import get_rocm_arch
 
+from aiter.jit.utils.chip_info import get_num_xcds
 from aiter.ops.flydsl.kernels.tensor_shim import _run_compiled
 
 from .gemm1 import compile_gemm1_a16w4_port, gemm1_a16w4_grid
@@ -135,6 +136,7 @@ def flydsl_a16w4_gemm1(
         act=act,
         b_cache_mod=b_cache_mod,
         xcd_swizzle=xcd_swizzle,
+        num_xcds=get_num_xcds(),
         waves_per_eu=waves_per_eu,
         w_dtype=w_dtype,
         w_layout=w_layout,
@@ -242,6 +244,7 @@ def flydsl_a16w4_gemm2(
         TILE_K=TILE_K,
         b_cache_mod=_b_cache_mod,
         xcd_swizzle=xcd_swizzle,
+        num_xcds=get_num_xcds(),
         waves_per_eu=waves_per_eu,
         w_dtype=w_dtype,
         persist=_persist,
