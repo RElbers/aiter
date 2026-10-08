@@ -570,6 +570,7 @@ jobs:
           SUMMARY_PYTHON_VERSION: ${{ matrix.python_version }}
           SUMMARY_RELEASE_TYPE: ${{ env.RELEASE_TYPE }}
           SUMMARY_GPU_ARCHS: ${{ env.GPU_ARCHS }}
+          SUMMARY_GPU_TARGETS: ${{ env.AITER_GPU_TARGETS }}
           SUMMARY_WHEEL_DIR: dist
         run: |
           if [ -f .github/scripts/generate_summary.py ]; then

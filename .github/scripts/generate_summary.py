@@ -49,6 +49,7 @@ def build_summary(summary: Path) -> None:
     python_version = os.environ.get("SUMMARY_PYTHON_VERSION", "unknown")
     release_type = os.environ.get("SUMMARY_RELEASE_TYPE", "unknown")
     gpu_archs = os.environ.get("SUMMARY_GPU_ARCHS", "unknown")
+    gpu_targets = os.environ.get("SUMMARY_GPU_TARGETS", "")
     wheel_dir = os.environ.get("SUMMARY_WHEEL_DIR", "dist")
     index_url = _get_index_url(release_type, gpu_archs.replace(";", "-"))
 
@@ -60,6 +61,8 @@ def build_summary(summary: Path) -> None:
         ["Release type", f"`{release_type}`"],
         ["GPU architectures", f"`{gpu_archs}`"],
     ]
+    if gpu_targets:
+        rows.append(["GPU targets (override GPU architectures)", f"`{gpu_targets}`"])
     if index_url:
         rows.append(["Index URL", index_url])
     _table(summary, ["Item", "Value"], rows)
