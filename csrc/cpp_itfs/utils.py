@@ -93,11 +93,14 @@ AITER_PYTHON_ROOT_DIR = (
 )
 sys.path.insert(0, os.path.join(AITER_PYTHON_ROOT_DIR, "aiter", "jit", "utils"))
 
-from chip_info import get_gfx_runtime
+from build_targets import KNOWN_GFX
+from chip_info import get_gfx_list, get_gfx_runtime
 
-GPU_ARCH = os.environ.get("GPU_ARCHS")
-if GPU_ARCH is None:
-    GPU_ARCH = get_gfx_runtime()
+# AITER_BUILD_TARGETS outranks GPU_ARCHS for the arch set, as in aiter/jit/core.py.
+# HSACO paths are keyed separately by the live GPU.
+BUILD_ARCHS = get_gfx_list()
+# The ';'-joined string this module exported before BUILD_ARCHS; nothing here reads it.
+GPU_ARCH = ";".join(BUILD_ARCHS)
 AITER_REBUILD = int(os.environ.get("AITER_REBUILD", "0"))
 
 HOME_PATH = (
@@ -214,32 +217,43 @@ def hip_flag_checker(flag_hip: str) -> bool:
 
 
 def validate_and_update_archs():
-    archs = GPU_ARCH.split(";")
-    archs = [arch.strip().split(":")[0] for arch in archs]
-    # List of allowed architectures
-    allowed_archs = [
-        "native",
-        "gfx90a",
-        "gfx940",
-        "gfx941",
-        "gfx942",
-        "gfx950",
-        "gfx1151",
-    ]
+    if BUILD_ARCHS == ["cpu"]:
+        raise RuntimeError(
+            "No GPU detected and neither AITER_BUILD_TARGETS nor GPU_ARCHS names "
+            "an arch. Set GPU_ARCHS=gfx942 (or similar) to build without a GPU."
+        )
+    unknown = [arch for arch in BUILD_ARCHS if arch not in KNOWN_GFX]
+    if unknown:
+        raise RuntimeError(
+            f"GPU archs {unknown} are not supported. Known targets: "
+            f"{sorted(KNOWN_GFX)}"
+        )
+    return sorted(set(BUILD_ARCHS))
 
-    # Validate if each element in archs is in allowed_archs
-    assert all(
-        arch in allowed_archs for arch in archs
-    ), f"One of GPU archs of {archs} is invalid or not supported"
-    for i in range(len(archs)):
-        if archs[i] == "native":
-            archs[i] = get_gfx_runtime()
 
-    return archs
+@lru_cache(maxsize=1)
+def template_archs():
+    """The live GPU's arch for template libraries; the build targets without a GPU."""
+    try:
+        return [get_gfx_runtime()]
+    except RuntimeError:
+        return validate_and_update_archs()
+
+
+@lru_cache(maxsize=1)
+def get_arch_key():
+    """Filename-safe identity of template_archs(), for cache paths."""
+    return "+".join(template_archs())
+
+
+def get_template_build_dir(folder):
+    # Template libraries contain device code, so a specialization built for one
+    # arch must never satisfy not_built() for another.
+    return f"{BUILD_DIR}/template_libs/{get_arch_key()}/{folder}"
 
 
 def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
-    sub_build_dir = os.path.join(BUILD_DIR, folder)
+    sub_build_dir = get_template_build_dir(folder)
     include_dir = f"{sub_build_dir}/include"
     if not os.path.exists(include_dir):
         os.makedirs(include_dir, exist_ok=True)
@@ -313,8 +327,7 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
             ]
         if hip_version > Version("6.2.41133"):
             cxxflags += ["-mllvm -amdgpu-coerce-illegal-types=1"]
-        archs = validate_and_update_archs()
-        cxxflags += [f"--offload-arch={arch}" for arch in archs]
+        cxxflags += [f"--offload-arch={arch}" for arch in template_archs()]
         cxxflags = [flag for flag in set(cxxflags) if hip_flag_checker(flag)]
         if IS_WINDOWS:
             # There is no make on Windows, so drive hipcc with ninja instead.
@@ -365,7 +378,7 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
 def run_lib(func_name, folder=None):
     if folder is None:
         folder = func_name
-    lib_path = os.path.join(BUILD_DIR, folder, LIB_BASENAME)
+    lib_path = os.path.join(get_template_build_dir(folder), LIB_BASENAME)
     # os.RTLD_LAZY does not exist on Windows.
     mode = os.RTLD_LAZY if not IS_WINDOWS else 0
     lib = ctypes.CDLL(lib_path, mode)
@@ -383,7 +396,9 @@ def get_default_func_name(md_name, args: tuple):
 
 
 def not_built(folder):
-    return not os.path.exists(os.path.join(BUILD_DIR, folder, LIB_BASENAME))
+    return not os.path.exists(
+        os.path.join(get_template_build_dir(folder), LIB_BASENAME)
+    )
 
 
 def compile_template_op(
@@ -481,10 +496,14 @@ def compile_hsaco(
     kernel_name,
     hsaco,
     shared=0,
-    gcnArchName=GPU_ARCH,
+    gcnArchName=None,
     constexprs=None,
     extra_metadata=None,
 ):
+    # Default to the live device: HSACOs are compiled and looked up by it, and a
+    # multi-arch GPU_ARCHS has no single directory to write into.
+    if gcnArchName is None:
+        gcnArchName = get_gfx_runtime()
     build_dir = f"{BUILD_DIR}/{gcnArchName}"
     constexprs = OrderedDict(constexprs or {})
     func_name = get_default_func_name(kernel_name, tuple(constexprs.values()))
@@ -516,14 +535,16 @@ def compile_hsaco(
 def check_hsaco(func_name, constexprs=None):
     constexprs = OrderedDict(constexprs or {})
     hsaco_name = get_default_func_name(func_name, tuple(constexprs.values()))
-    return os.path.exists(f"{BUILD_DIR}/{GPU_ARCH}/{hsaco_name}.hsaco")
+    return os.path.exists(f"{BUILD_DIR}/{get_gfx_runtime()}/{hsaco_name}.hsaco")
 
 
 @cache
 def get_hsaco_launcher(hsaco_name, kernel_name):
     from csrc.cpp_itfs.hsaco_launcher import HsacoLauncher, read_hsaco
 
-    hsaco = read_hsaco(f"{BUILD_DIR}/{GPU_ARCH}/{hsaco_name}.hsaco")
+    # Live arch, not the build target: a cross-arch build has no HSACO for the
+    # composite path. get_gfx_runtime() is cached, so it need not be a cache key.
+    hsaco = read_hsaco(f"{BUILD_DIR}/{get_gfx_runtime()}/{hsaco_name}.hsaco")
     hsaco_launcher = HsacoLauncher()
     hsaco_launcher.load_module(hsaco)
     hsaco_launcher.get_function(kernel_name)
@@ -535,7 +556,7 @@ def run_hsaco(
 ):
     constexprs = OrderedDict(constexprs or {})
     hsaco_name = get_default_func_name(func_name, tuple(constexprs.values()))
-    metadata_path = f"{BUILD_DIR}/{GPU_ARCH}/{hsaco_name}.json"
+    metadata_path = f"{BUILD_DIR}/{get_gfx_runtime()}/{hsaco_name}.json"
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
     with open(metadata_path, "r") as f:

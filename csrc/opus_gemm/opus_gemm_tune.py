@@ -937,19 +937,15 @@ def _ensure_kids_compiled(candidate_kids):
 
     candidate_kids = frozenset(int(k) for k in candidate_kids)
     # Restrict the default compile floor to the running GPU's arch.
-    try:
-        from aiter.jit.utils.chip_info import get_gfx_runtime
+    from aiter.jit.utils.chip_info import get_gfx_list, get_gfx_runtime
 
+    try:
         _run_arch = get_gfx_runtime().lower()
         _defaults = default_compiled_kids_for_arch({_run_arch})
     except Exception:  # noqa: BLE001
         # A runtime probe can fail in a prebuild environment with explicit
         # targets. Do not require off-arch defaults in that case.
-        _target_arches = {
-            arch.strip().lower()
-            for arch in os.getenv("GPU_ARCHS", "native").split(";")
-            if arch.strip() and arch.strip().lower() != "native"
-        }
+        _target_arches = set(get_gfx_list()) - {"cpu"}
         _defaults = default_compiled_kids_for_arch(_target_arches or None)
     required = candidate_kids | _defaults
 

@@ -14,11 +14,14 @@ import time
 import traceback
 
 from aiter.aot.flydsl.common import (
+    OpKind,
+    cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
     job_identity,
     override_env,
     run_jobs_parallel,
+    select_target_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.kernels.tensor_shim import ptr_arg
@@ -443,7 +446,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", nargs="+", default=DEFAULT_CSVS)
     args = parser.parse_args(argv)
-    jobs = collect_aot_jobs(args.csv, parse_csv)
+    jobs = select_target_jobs(
+        OpKind.GROUPED_MOE, collect_aot_jobs(args.csv, parse_csv), cli_requested_archs()
+    )
 
     total_t0 = time.time()
     print(f"--- Compiling {len(jobs)} grouped-MoE kernels ---")

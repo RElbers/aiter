@@ -177,8 +177,9 @@ else:
 
 # Name-based reverse lookup for get_tune_dict()
 # Must include kernels from ALL arches, not just the current get_gfx() arch.
-# In a multi-target build (GPU_ARCHS=gfx942;gfx950), get_gfx() returns only the
-# last entry (gfx950), but build_tune_dict processes CSV rows for all build targets.
+# In a multi-target build (GPU_ARCHS=gfx942;gfx950), get_gfx() returns only one
+# arch (the live one if targeted, else the max), but build_tune_dict processes CSV
+# rows for all build targets.
 # If the name registry only has the current arch's kernels, codegen crashes when it
 # encounters a CSV row referencing a kernel name from a different arch.
 # Note: cannot use {**a, **b} merge — both arches use overlapping integer IDs,

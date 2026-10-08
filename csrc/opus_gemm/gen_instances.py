@@ -5,9 +5,21 @@ import glob
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pandas as pd
+
+this_dir = os.path.dirname(os.path.abspath(__file__))
+AITER_CORE_DIR = (
+    os.path.join(os.path.abspath(f"{this_dir}/../../../"), "aiter/jit/utils")
+    if os.path.exists(
+        os.path.join(os.path.abspath(f"{this_dir}/../../../"), "aiter_meta")
+    )
+    else os.path.abspath(f"{this_dir}/../../aiter/jit/utils")
+)
+sys.path.insert(0, AITER_CORE_DIR)
+from chip_info import get_gfx_list
 from codegen import gen_instances_gfx942 as _gfx942  # noqa: F401
 
 # Architecture modules register their code emitters at import time.
@@ -1211,6 +1223,15 @@ if __name__ == "__main__":
                 out.append(path)
         return out
 
+    # Build targets, resolved as in aiter/jit/core.py (AITER_BUILD_TARGETS, then
+    # GPU_ARCHS, then the live GPU). With none of them, every arch is built.
+    # Kids are filtered by arch only: opus fails a launch whose tuned kid is not
+    # compiled instead of falling back, and a GPU-free build cannot know the CU
+    # count of the parts it targets.
+    target_arches = set(get_gfx_list())
+    if target_arches == {"cpu"}:
+        target_arches = None
+
     csv_kids: set[int] = set()
     csv_paths = _expand_tune_paths(args.tune_files)
     for path in csv_paths:
@@ -1255,24 +1276,6 @@ if __name__ == "__main__":
     # Per-arch filter: drop kids whose arch_prefix is not in the target build set.
     _kid_arch = _kid_arch_common
 
-    target_arches = None
-    gpu_archs_env = os.getenv("GPU_ARCHS", "native").strip()
-    explicit = [
-        a.strip().lower()
-        for a in gpu_archs_env.split(";")
-        if a.strip() and a.strip().lower() != "native"
-    ]
-    if explicit:
-        target_arches = set(explicit)
-    else:
-        # GPU_ARCHS=native: probe live GPU; skip filter if rocminfo unavailable.
-        try:
-            from aiter.jit.utils.chip_info import get_gfx_runtime
-
-            target_arches = {get_gfx_runtime().lower()}
-        except Exception:  # noqa: BLE001
-            target_arches = None
-
     if target_arches is not None:
         before = len(S)
         S = {kid for kid in S if _kid_arch(kernels_list[kid]) in target_arches}
@@ -1288,7 +1291,7 @@ if __name__ == "__main__":
     archs_for_header = (
         sorted(target_arches)
         if target_arches is not None
-        else ["gfx942", "gfx950", "gfx1250"]
+        else sorted({_kid_arch(k) for k in kernels_list.values()})
     )
     with open(os.path.join(args.working_path, "opus_build_archs.h"), "w") as f:
         f.write(
