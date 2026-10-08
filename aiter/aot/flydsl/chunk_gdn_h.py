@@ -18,7 +18,8 @@ Usage:
 
 Environment variables:
     FLYDSL_RUNTIME_CACHE_DIR  Cache directory (default: ~/.flydsl/cache)
-    ARCH                      Target GPU architecture (e.g. gfx942, gfx950).
+    AITER_GPU_TARGETS, ARCH, GPU_ARCHS  Archs to compile for, in that order of
+                              precedence; the live GPU when none is set.
 """
 
 from __future__ import annotations
@@ -34,12 +35,15 @@ from typing import Any
 import flydsl.expr as fx
 
 from aiter.aot.flydsl.common import (
+    OpKind,
+    cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
     cu_num_to_arch,
     job_identity,
     override_env,
     run_jobs_parallel,
+    select_target_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.kernels.gdr_prefill import compile_chunk_gated_delta_h
@@ -354,9 +358,10 @@ def main():
     cache_dir = os.path.expanduser(
         os.environ.get("FLYDSL_RUNTIME_CACHE_DIR", "~/.flydsl/cache")
     )
-    arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS") or "(auto-detect)"
-
-    jobs = collect_aot_jobs(csv_paths, parse_csv)
+    archs = cli_requested_archs()
+    jobs = select_target_jobs(
+        OpKind.CHUNK_GDN_H, collect_aot_jobs(csv_paths, parse_csv), archs
+    )
 
     print("=" * 72)
     print("FlyDSL chunk-gated-delta-h opt (K5) AOT Pre-compilation")
@@ -366,7 +371,7 @@ def main():
     print(f"  Total jobs:   {len(jobs)}")
     print("  Compile arch: (from cu_num)")
     print(f"  Cache dir:    {cache_dir}")
-    print(f"  Target arch:  {arch}")
+    print(f"  Target arch:  {'+'.join(sorted(archs)) if archs else 'every arch'}")
     print("=" * 72)
 
     total_t0 = time.time()

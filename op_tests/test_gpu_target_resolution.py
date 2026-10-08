@@ -126,6 +126,70 @@ def test_gpu_archs_parses_the_same_everywhere():
         raise AssertionError(f"GPU_ARCHS={gpu_archs!r}: get_build_targets_env -> {got}")
 
 
+def test_flydsl_aot_reads_arch_only_in_the_clis():
+    from aiter.aot.flydsl import common
+    from aiter.jit.utils import chip_info
+
+    # (env, run_aot targets, CLI targets). ARCH=64 is what conda-build exports.
+    cases = (
+        ({"AITER_GPU_TARGETS": "gfx950:128", "ARCH": "gfx942"}, {"gfx950"}, {"gfx950"}),
+        (
+            {"ARCH": "gfx942,gfx1250", "GPU_ARCHS": "gfx950"},
+            {"gfx950"},
+            {"gfx942", "gfx1250"},
+        ),
+        ({"ARCH": "64", "GPU_ARCHS": "gfx1250"}, {"gfx1250"}, {"gfx1250"}),
+    )
+    for env, run_aot_archs, cli_archs in cases:
+        with _target_env(**env), _cleared_cache(chip_info.get_gfx_list):
+            archs = (common.requested_archs(), common.cli_requested_archs())
+
+        assert archs == (run_aot_archs, cli_archs), (env, archs)
+
+
+def test_flydsl_aot_runs_every_kind_through_target_selection():
+    import pytest
+
+    pytest.importorskip("flydsl")
+    from aiter.aot.flydsl import common
+    from aiter.jit.utils.build_targets import KNOWN_GFX
+
+    class CompileReached(BaseException):
+        pass
+
+    def stop_at_compile_arch(name, value):
+        if name == "FLYDSL_GPU_ARCH":
+            compile_archs.append(value)
+            raise CompileReached
+        return contextlib.nullcontext()
+
+    for kind in common.OpKind:
+        with mock.patch.object(common, "requested_archs", return_value=None):
+            jobs = common._collect_aot_jobs_for(kind)
+        assert jobs, kind
+
+        # job_arch must name the arch compile_one_config actually builds for:
+        # check one job per (gfx, cu_num), the inputs an arch is derived from,
+        # stopping before any compile work.
+        compile_one_config = common._compile_one_config_for(kind)
+        module = sys.modules[compile_one_config.__module__]
+        samples = {(j.get("gfx", ""), j.get("cu_num", 0)): j for j in jobs}
+        for job in samples.values():
+            arch = common.job_arch(kind, job)
+            assert arch in KNOWN_GFX - {"gfx908"}, (kind, arch)
+            compile_archs = []
+            with mock.patch.object(module, "override_env", stop_at_compile_arch):
+                try:
+                    compile_one_config(**dict(job))
+                except CompileReached:
+                    pass
+            assert compile_archs == [arch], (kind, arch, compile_archs)
+
+        # No kind compiles for gfx908, so every job of every kind must drop.
+        with mock.patch.object(common, "requested_archs", return_value={"gfx908"}):
+            assert common._collect_aot_jobs_for(kind) == [], kind
+
+
 def test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch():
     import json
     import subprocess
@@ -228,6 +292,8 @@ if __name__ == "__main__":
     test_gpu_archs_takes_the_live_cu_count()
     test_unparseable_gpu_archs_defers_to_gpu_targets()
     test_gpu_archs_parses_the_same_everywhere()
+    test_flydsl_aot_reads_arch_only_in_the_clis()
+    test_flydsl_aot_runs_every_kind_through_target_selection()
     test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch()
     test_template_cache_separates_architectures()
     test_hsaco_lookup_uses_live_arch()

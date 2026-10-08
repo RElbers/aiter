@@ -23,17 +23,19 @@ from __future__ import annotations
 import argparse
 import csv
 import os
-import re
 import sys
 import time
 
 from aiter.aot.flydsl.common import (
+    OpKind,
+    cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
     cu_num_to_arch,
     job_identity,
     override_env,
     run_jobs_parallel,
+    select_target_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.conv_kernels import (
@@ -160,19 +162,10 @@ def _row_npq_per_sample(shape) -> int:
     )
 
 
-def _requested_archs():
-    """ARCH / GPU_ARCHS as a set, or None. Applied in parse_csv so setup.py's run_aot sees it."""
-    arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
-    if not arch:
-        return None
-    return {a.strip() for a in re.split(r"[;,]", arch) if a.strip()} or None
-
-
 def parse_csv(csv_path: str):
     """Parse the tuned conv CSV into unique conv and transpose compile jobs."""
     jobs = []
     seen = set()
-    keep_archs = _requested_archs()
 
     with open(csv_path, newline="") as f:
         for raw in csv.DictReader(f):
@@ -201,8 +194,6 @@ def parse_csv(csv_path: str):
 
             cu_num = int(row.get("cu_num") or 0)
             gfx = row.get("gfx", "")
-            if keep_archs is not None and job_arch(cu_num, gfx) not in keep_archs:
-                continue
 
             groups = shape["groups"]
             cgp = _pad_channels(shape["C"] // groups)
@@ -481,11 +472,13 @@ def main():
     cache_dir = os.path.expanduser(
         os.environ.get("FLYDSL_RUNTIME_CACHE_DIR", "~/.flydsl/cache")
     )
-    arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
-
+    archs = cli_requested_archs()
     all_jobs = collect_aot_jobs(csv_paths, parse_csv)
-    if arch:
-        print(f"[aiter] ARCH={arch}: {len(all_jobs)} jobs match")
+    n_before = len(all_jobs)
+    all_jobs = select_target_jobs(OpKind.CONV, all_jobs, archs)
+    print(
+        f"[aiter] {'+'.join(sorted(archs)) if archs else 'every arch'}: {len(all_jobs)}/{n_before} jobs match"
+    )
 
     conv_jobs = [j for j in all_jobs if j["kind"] == "conv3d"]
     tr_jobs = [j for j in all_jobs if j["kind"] == "transpose"]
@@ -500,7 +493,7 @@ def main():
     print(f"  transpose jobs:   {len(tr_jobs)}  (all variable-resolution)")
     print(f"  Total jobs:       {len(all_jobs)}")
     print(f"  Cache dir:        {cache_dir}")
-    print(f"  Target arch:      {arch or '(all archs found in CSVs)'}")
+    print(f"  Target arch:      {'+'.join(sorted(archs)) if archs else 'every arch'}")
     print(f"  AITER_CONV3D_DYN_HW={AITER_CONV3D_DYN_HW}  (must match at runtime)")
     print("=" * 72)
 

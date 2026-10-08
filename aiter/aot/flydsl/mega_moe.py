@@ -30,6 +30,7 @@ TOPK = 6
 MODEL_DIM = 7168
 INTER_DIM = 3072
 NUM_CU = 256
+MEGA_MOE_AOT_ARCH = "gfx950"
 SWIGLU_LIMIT = 10.0
 _DEFAULT_COMBINE_BLOCK_NUM = 128
 _DEFAULT_COMBINE_WARP_NUM = 8
@@ -415,7 +416,7 @@ def compile_one_config(**job):
             inter_dim=inter_dim,
             world_size=world_size,
         )
-        with compile_only_env(), override_env("FLYDSL_GPU_ARCH", "gfx950"):
+        with compile_only_env(), override_env("FLYDSL_GPU_ARCH", MEGA_MOE_AOT_ARCH):
             if job["stage"] == 1:
                 _compile_stage1(
                     job["mtpr"],

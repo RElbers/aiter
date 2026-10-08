@@ -31,7 +31,8 @@ Usage:
 
 Environment variables:
     FLYDSL_RUNTIME_CACHE_DIR  Cache directory (default: ~/.flydsl/cache)
-    GPU_ARCHS / ARCH          Target GPU architecture information for logging.
+    AITER_GPU_TARGETS, ARCH, GPU_ARCHS  Archs to compile for, in that order of
+                              precedence; the live GPU when none is set.
 """
 
 from __future__ import annotations
@@ -49,12 +50,15 @@ import flydsl.compiler as flyc
 import flydsl.expr as fx
 
 from aiter.aot.flydsl.common import (
+    OpKind,
+    cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
     cu_num_to_arch,
     job_identity,
     override_env,
     run_jobs_parallel,
+    select_target_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.batched_gemm_a8w8_gfx950 import (
@@ -990,7 +994,7 @@ def _compile_ptpc_wmma_to_cache(
 
 
 def job_arch(cu_num: int = 0, gfx: str = "") -> str:
-    """Target arch a job would compile for -- shared by dispatch and ARCH filtering."""
+    """Target arch a job would compile for -- shared by dispatch and target selection."""
     return gfx or cu_num_to_arch(cu_num, default=GEMM_AOT_ARCH_DEFAULT)
 
 
@@ -1086,17 +1090,13 @@ def main():
     cache_dir = os.path.expanduser(
         os.environ.get("FLYDSL_RUNTIME_CACHE_DIR", "~/.flydsl/cache")
     )
-    arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
-
+    archs = cli_requested_archs()
     all_jobs = collect_aot_jobs(csv_paths, parse_csv)
-    if arch:
-        # GPU_ARCHS may be a ';'- or ','-separated list (e.g. "gfx942;gfx950").
-        arch_set = {a.strip() for a in re.split(r"[;,]", arch) if a.strip()}
-        n_before = len(all_jobs)
-        all_jobs = [
-            j for j in all_jobs if job_arch(j["cu_num"], j.get("gfx", "")) in arch_set
-        ]
-        print(f"[aiter] ARCH={arch}: {len(all_jobs)}/{n_before} jobs match")
+    n_before = len(all_jobs)
+    all_jobs = select_target_jobs(OpKind.GEMM, all_jobs, archs)
+    print(
+        f"[aiter] {'+'.join(sorted(archs)) if archs else 'every arch'}: {len(all_jobs)}/{n_before} jobs match"
+    )
 
     print("=" * 72)
     print("FlyDSL GEMM AOT Pre-compilation")
@@ -1107,7 +1107,7 @@ def main():
         print(f"  {kind} jobs:{' ' * max(1, 15 - len(kind))}{count}")
     print(f"  Total jobs:       {len(all_jobs)}")
     print(f"  Cache dir:        {cache_dir}")
-    print(f"  Target arch:      {arch or '(all archs found in CSVs)'}")
+    print(f"  Target arch:      {'+'.join(sorted(archs)) if archs else 'every arch'}")
     print("=" * 72)
 
     total_t0 = time.time()
