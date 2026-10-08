@@ -1521,7 +1521,7 @@
         "flags_extra_hip": [
             "'-ffast-math'",
             "'-fno-finite-math-only'",
-            "('-mllvm -enable-post-misched=1' if (get_gfx() == 'gfx950' or 'gfx950' in os.environ.get('GPU_ARCHS', '')) else '')"
+            "('-mllvm -enable-post-misched=1' if 'gfx950' in get_gfx_list() else '')"
         ],
         "extra_ldflags": "None",
         "extra_include": [],
