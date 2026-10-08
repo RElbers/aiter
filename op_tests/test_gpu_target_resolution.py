@@ -67,13 +67,23 @@ def test_gpu_archs_takes_the_live_cu_count():
     assert targets == [("gfx950", 128)], targets
 
 
+def test_unparseable_gpu_archs_defers_to_gpu_targets():
+    from aiter.jit import core
+
+    for gpu_archs in ("   ", " ; "):
+        with _target_env(AITER_GPU_TARGETS="gfx950", GPU_ARCHS=gpu_archs):
+            archs = core.validate_and_update_archs()
+
+        assert archs == ["gfx950"], f"GPU_ARCHS={gpu_archs!r}: got {archs}"
+
+
 def test_template_cache_separates_architectures():
     import csrc.cpp_itfs.utils as cpp_utils
 
     directories = []
     for gfx in ("gfx942", "gfx950"):
         with (
-            mock.patch.object(cpp_utils, "GPU_ARCH", gfx),
+            mock.patch.object(cpp_utils, "BUILD_ARCHS", [gfx]),
             _cleared_cache(cpp_utils.get_arch_key),
         ):
             directories.append(cpp_utils.get_template_build_dir("same_specialization"))
@@ -87,7 +97,7 @@ def test_hsaco_lookup_uses_live_arch():
     with (
         tempfile.TemporaryDirectory() as build_dir,
         mock.patch.object(cpp_utils, "BUILD_DIR", build_dir),
-        mock.patch.object(cpp_utils, "GPU_ARCH", "gfx942;gfx950"),
+        mock.patch.object(cpp_utils, "BUILD_ARCHS", ["gfx942", "gfx950"]),
         mock.patch.object(cpp_utils, "get_gfx_runtime", return_value="gfx950"),
     ):
         hsaco_name = cpp_utils.get_default_func_name("kernel", (1,))
@@ -120,6 +130,7 @@ if __name__ == "__main__":
     test_runtime_arch_resolution()
     test_opus_flags_follow_target_membership()
     test_gpu_archs_takes_the_live_cu_count()
+    test_unparseable_gpu_archs_defers_to_gpu_targets()
     test_template_cache_separates_architectures()
     test_hsaco_lookup_uses_live_arch()
     print("ALL_PASS")

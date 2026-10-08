@@ -701,7 +701,13 @@ def validate_and_update_archs():
     named = get_build_archs_env()
     if named is not None:
         archs = list(named)
-        explicit = set(gpu_archs_env_names())
+        try:
+            explicit = set(gpu_archs_env_names())
+        except RuntimeError as e:
+            logger.warning(
+                f"Ignoring GPU_ARCHS, AITER_GPU_TARGETS takes precedence: {e}"
+            )
+            explicit = set()
         if explicit and explicit != set(archs):
             logger.warning(
                 f"GPU_ARCHS={sorted(explicit)} disagrees with "

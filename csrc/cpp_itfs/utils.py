@@ -93,17 +93,14 @@ AITER_PYTHON_ROOT_DIR = (
 )
 sys.path.insert(0, os.path.join(AITER_PYTHON_ROOT_DIR, "aiter", "jit", "utils"))
 
-from build_targets import KNOWN_GFX, get_build_archs_env
-from chip_info import get_gfx_runtime
+from build_targets import KNOWN_GFX
+from chip_info import get_gfx_list, get_gfx_runtime
 
 # AITER_GPU_TARGETS outranks GPU_ARCHS for the arch set, as in aiter/jit/core.py.
 # HSACO paths are keyed separately by the live GPU.
-GPU_ARCH = (os.environ.get("GPU_ARCHS") or "").strip()
-_named = get_build_archs_env()
-if _named:
-    GPU_ARCH = ";".join(_named)
-elif not GPU_ARCH:
-    GPU_ARCH = get_gfx_runtime()
+BUILD_ARCHS = get_gfx_list()
+# The ';'-joined string this module exported before BUILD_ARCHS; nothing here reads it.
+GPU_ARCH = ";".join(BUILD_ARCHS)
 AITER_REBUILD = int(os.environ.get("AITER_REBUILD", "0"))
 
 HOME_PATH = (
@@ -220,19 +217,18 @@ def hip_flag_checker(flag_hip: str) -> bool:
 
 
 def validate_and_update_archs():
-    archs = GPU_ARCH.split(";")
-    archs = [arch.strip().split(":")[0] for arch in archs]
-    allowed_archs = {"native", *KNOWN_GFX}
-
-    # Validate if each element in archs is in allowed_archs
-    assert all(
-        arch in allowed_archs for arch in archs
-    ), f"One of GPU archs of {archs} is invalid or not supported"
-    for i in range(len(archs)):
-        if archs[i] == "native":
-            archs[i] = get_gfx_runtime()
-
-    return sorted(set(archs))
+    if BUILD_ARCHS == ["cpu"]:
+        raise RuntimeError(
+            "No GPU detected and neither AITER_GPU_TARGETS nor GPU_ARCHS names "
+            "an arch. Set GPU_ARCHS=gfx942 (or similar) to build without a GPU."
+        )
+    unknown = [arch for arch in BUILD_ARCHS if arch not in KNOWN_GFX]
+    if unknown:
+        raise RuntimeError(
+            f"GPU archs {unknown} are not supported. Known targets: "
+            f"{sorted(KNOWN_GFX)}"
+        )
+    return sorted(set(BUILD_ARCHS))
 
 
 @lru_cache(maxsize=1)
