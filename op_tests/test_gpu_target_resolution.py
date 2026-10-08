@@ -152,9 +152,18 @@ def test_flydsl_aot_reads_arch_only_in_the_clis():
 
 
 def test_flydsl_aot_runs_every_kind_through_target_selection():
-    import pytest
+    import importlib.util
 
-    pytest.importorskip("flydsl")
+    if importlib.util.find_spec("flydsl") is None:
+        # CI runs this file directly, where a pytest skip would escape __main__.
+        if "pytest" in sys.modules:
+            import pytest
+
+            pytest.skip("flydsl is not installed")
+        print(
+            "SKIP test_flydsl_aot_runs_every_kind_through_target_selection: no flydsl"
+        )
+        return
     from aiter.aot.flydsl import common
     from aiter.jit.utils.build_targets import KNOWN_GFX
 
@@ -178,6 +187,12 @@ def test_flydsl_aot_runs_every_kind_through_target_selection():
         compile_one_config = common._compile_one_config_for(kind)
         module = sys.modules[compile_one_config.__module__]
         samples = {(j.get("gfx", ""), j.get("cu_num", 0)): j for j in jobs}
+        # A row's gfx outranks its CU count, which only identifies legacy rows:
+        # 256 CUs alone would map to gfx950.
+        if "gfx" in jobs[0]:
+            probe = {**jobs[0], "gfx": "gfx1250", "cu_num": 256}
+            assert common.job_arch(kind, probe) == "gfx1250", kind
+            samples["probe"] = probe
         for job in samples.values():
             arch = common.job_arch(kind, job)
             assert arch in KNOWN_GFX - {"gfx908"}, (kind, arch)

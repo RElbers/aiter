@@ -113,15 +113,13 @@ def job_arch(kind: OpKind, job: dict[str, Any]) -> str:
 
         return conv_job_arch(job.get("cu_num", 0), job.get("gfx", ""))
     if kind is OpKind.MOE:
-        from .moe import MOE_AOT_ARCH_DEFAULT
+        from .moe import job_arch as moe_job_arch
 
-        return cu_num_to_arch(job.get("cu_num", 0), default=MOE_AOT_ARCH_DEFAULT)
+        return moe_job_arch(job.get("cu_num", 0), job.get("gfx", ""))
     if kind is OpKind.CHUNK_GDN_H:
-        from .chunk_gdn_h import CHUNK_GDN_H_AOT_ARCH_DEFAULT
+        from .chunk_gdn_h import job_arch as chunk_gdn_h_job_arch
 
-        return cu_num_to_arch(
-            job.get("cu_num", 0), default=CHUNK_GDN_H_AOT_ARCH_DEFAULT
-        )
+        return chunk_gdn_h_job_arch(job.get("cu_num", 0), job.get("gfx", ""))
     if kind is OpKind.GROUPED_MOE:
         from .grouped_moe import GROUPED_MOE_AOT_ARCH_DEFAULT
 

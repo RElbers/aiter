@@ -127,6 +127,7 @@ def parse_csv(csv_path: str) -> list[dict[str, Any]]:
                 H = int(row["H"])
                 Hg = int(row["Hg"])
                 cu_num = int(row.get("cu_num") or 0)
+                gfx = (row.get("gfx") or "").strip().lower()
                 is_varlen = _parse_bool(row.get("is_varlen") or "True")
                 use_h0 = _parse_bool(row.get("use_h0") or "True")
                 store_fs = _parse_bool(row.get("store_fs") or "True")
@@ -152,6 +153,7 @@ def parse_csv(csv_path: str) -> list[dict[str, Any]]:
                     "kernel_name": _KERNEL_NAME,
                     "dtype": dtype,
                     "cu_num": cu_num,
+                    "gfx": gfx,
                     "K": K,
                     "V": V,
                     "BT": BT,
@@ -306,9 +308,14 @@ def _format_shape_str(job: dict) -> str:
     )
 
 
-def compile_one_config(*, cu_num: int = 0, **kwargs) -> dict:
+def job_arch(cu_num: int = 0, gfx: str = "") -> str:
+    """Target arch a job would compile for -- shared by dispatch and target selection."""
+    return gfx or cu_num_to_arch(cu_num, default=CHUNK_GDN_H_AOT_ARCH_DEFAULT)
+
+
+def compile_one_config(*, cu_num: int = 0, gfx: str = "", **kwargs) -> dict:
     """Compile one opt configuration and save it to cache."""
-    aot_arch = cu_num_to_arch(cu_num, default=CHUNK_GDN_H_AOT_ARCH_DEFAULT)
+    aot_arch = job_arch(cu_num, gfx)
     kwargs.pop("kernel_name", None)
     shape_str = _format_shape_str(kwargs)
     result = {
