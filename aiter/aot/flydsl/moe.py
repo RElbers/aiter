@@ -19,8 +19,11 @@ Usage:
 
 Environment variables:
     FLYDSL_RUNTIME_CACHE_DIR  Cache directory (default: ~/.flydsl/cache)
-    AITER_BUILD_TARGETS, ARCH, GPU_ARCHS  Archs to compile for, in that order of
-                              precedence; the live GPU when none is set.
+
+    Archs to compile for, highest precedence first; the live GPU when none is set:
+    AITER_BUILD_TARGETS       (e.g. "gfx942:304", "gfx942:304;gfx950:256")
+    ARCH                      (e.g. "gfx942", "gfx942;gfx950")
+    GPU_ARCHS                 (e.g. "gfx942", "gfx942;gfx950")
 """
 
 import argparse
