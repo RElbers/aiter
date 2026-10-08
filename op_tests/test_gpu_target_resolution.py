@@ -126,6 +126,53 @@ def test_gpu_archs_parses_the_same_everywhere():
         raise AssertionError(f"GPU_ARCHS={gpu_archs!r}: get_build_targets_env -> {got}")
 
 
+def test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch():
+    import json
+    import subprocess
+
+    import pandas as pd
+
+    # A GPU-free build cannot know which CU counts of an arch it serves, and
+    # opus fails a launch whose tuned kid is missing, so no row may be dropped.
+    tuned = pd.read_csv(
+        Path(_REPO_ROOT, "aiter/configs/model_configs/dsv4_bf16_tuned_gemm.csv")
+    )
+    rows = tuned[(tuned["libtype"] == "opus") & (tuned["gfx"] == "gfx942")]
+    assert (rows["cu_num"] != 304).any(), "fixture lost its non-default CU rows"
+    row_kids = {int(kid) for kid in rows["solidx"]}
+
+    with tempfile.TemporaryDirectory() as work_dir:
+        csv_path = Path(work_dir, "tuned.csv")
+        rows.to_csv(csv_path, index=False)
+        compiled = {}
+        for gpu_archs in ("gfx942", "gfx950"):
+            out_dir = Path(work_dir, gpu_archs)
+            out_dir.mkdir()
+            env = {k: v for k, v in os.environ.items() if k != "AITER_GPU_TARGETS"}
+            subprocess.run(
+                [
+                    sys.executable,
+                    Path(_REPO_ROOT, "csrc/opus_gemm/gen_instances.py"),
+                    "--working_path",
+                    out_dir,
+                    "--tune_files",
+                    csv_path,
+                ],
+                check=True,
+                capture_output=True,
+                cwd=work_dir,
+                # CU_NUM pins the default count, so a gfx942:80 host cannot mask a
+                # CU filter by substituting its live count.
+                env={**env, "GPU_ARCHS": gpu_archs, "CU_NUM": "304"},
+            )
+            compiled[gpu_archs] = set(
+                json.loads(Path(out_dir, "compiled_kids.json").read_text())
+            )
+
+    assert row_kids <= compiled["gfx942"], sorted(row_kids - compiled["gfx942"])
+    assert not row_kids & compiled["gfx950"], sorted(row_kids & compiled["gfx950"])
+
+
 def test_template_cache_separates_architectures():
     import csrc.cpp_itfs.utils as cpp_utils
 
@@ -181,6 +228,7 @@ if __name__ == "__main__":
     test_gpu_archs_takes_the_live_cu_count()
     test_unparseable_gpu_archs_defers_to_gpu_targets()
     test_gpu_archs_parses_the_same_everywhere()
+    test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch()
     test_template_cache_separates_architectures()
     test_hsaco_lookup_uses_live_arch()
     print("ALL_PASS")
