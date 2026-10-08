@@ -232,14 +232,23 @@ def validate_and_update_archs():
 
 
 @lru_cache(maxsize=1)
+def template_archs():
+    """The live GPU's arch for template libraries; the build targets without a GPU."""
+    try:
+        return [get_gfx_runtime()]
+    except RuntimeError:
+        return validate_and_update_archs()
+
+
+@lru_cache(maxsize=1)
 def get_arch_key():
-    """Filename-safe identity of the resolved arch set, for cache paths."""
-    return "+".join(validate_and_update_archs())
+    """Filename-safe identity of template_archs(), for cache paths."""
+    return "+".join(template_archs())
 
 
 def get_template_build_dir(folder):
     # Template libraries contain device code, so a specialization built for one
-    # arch set must never satisfy not_built() for another.
+    # arch must never satisfy not_built() for another.
     return f"{BUILD_DIR}/template_libs/{get_arch_key()}/{folder}"
 
 
@@ -318,8 +327,7 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
             ]
         if hip_version > Version("6.2.41133"):
             cxxflags += ["-mllvm -amdgpu-coerce-illegal-types=1"]
-        archs = validate_and_update_archs()
-        cxxflags += [f"--offload-arch={arch}" for arch in archs]
+        cxxflags += [f"--offload-arch={arch}" for arch in template_archs()]
         cxxflags = [flag for flag in set(cxxflags) if hip_flag_checker(flag)]
         if IS_WINDOWS:
             # There is no make on Windows, so drive hipcc with ninja instead.

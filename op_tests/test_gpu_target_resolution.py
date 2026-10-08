@@ -259,15 +259,24 @@ def test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch():
 def test_template_cache_separates_architectures():
     import csrc.cpp_itfs.utils as cpp_utils
 
-    directories = []
-    for gfx in ("gfx942", "gfx950"):
+    # One multi-target build shared by a gfx942 host, a gfx950 host and a host
+    # with no GPU: (live GPU probe, archs compiled, cache folder).
+    no_gpu = mock.Mock(side_effect=RuntimeError("no GPU"))
+    cases = (
+        (mock.Mock(return_value="gfx942"), ["gfx942"], "gfx942"),
+        (mock.Mock(return_value="gfx950"), ["gfx950"], "gfx950"),
+        (no_gpu, ["gfx942", "gfx950"], "gfx942+gfx950"),
+    )
+    for get_gfx_runtime, archs, folder in cases:
         with (
-            mock.patch.object(cpp_utils, "BUILD_ARCHS", [gfx]),
+            mock.patch.object(cpp_utils, "BUILD_ARCHS", ["gfx942", "gfx950"]),
+            mock.patch.object(cpp_utils, "get_gfx_runtime", get_gfx_runtime),
+            _cleared_cache(cpp_utils.template_archs),
             _cleared_cache(cpp_utils.get_arch_key),
         ):
-            directories.append(cpp_utils.get_template_build_dir("same_specialization"))
-
-    assert directories[0] != directories[1], directories
+            assert cpp_utils.template_archs() == archs, folder
+            build_dir = cpp_utils.get_template_build_dir("op")
+            assert build_dir.endswith(f"/template_libs/{folder}/op"), build_dir
 
 
 def test_hsaco_lookup_uses_live_arch():
