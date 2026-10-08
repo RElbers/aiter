@@ -182,6 +182,25 @@ jobs:
       DOCKER_LOGIN: ${{ inputs.docker_login }}
 
     steps:
+      # The S3 upload below always publishes to whl-staging/gfx942-gfx950, so a
+      # wheel built for any other arch set would land under the wrong index.
+      - name: Check the build arches match the publish path
+        if: ${{ matrix.build_enabled && env.RELEASE_TYPE != 'none' && github.repository_owner == 'ROCm' && !github.event.pull_request.head.repo.fork }}
+        run: |
+          if [[ -n "${AITER_BUILD_TARGETS}" ]]; then
+            source="build_targets=${AITER_BUILD_TARGETS}"
+            requested="${AITER_BUILD_TARGETS}"
+          else
+            source="gpu_archs=${GPU_ARCHS}"
+            requested="${GPU_ARCHS}"
+          fi
+          archs=$(echo "${requested}" | tr ',;' '\n\n' | sed 's/:.*//; s/[[:space:]]//g' \
+            | tr '[:upper:]' '[:lower:]' | grep -v '^$' | sort -u | paste -sd';')
+          if [[ "${archs}" != "gfx942;gfx950" ]]; then
+            echo "::error::${source} builds for '${archs}', but wheels publish to whl-staging/gfx942-gfx950. Build for exactly gfx942 and gfx950, or set release_type to none."
+            exit 1
+          fi
+
       - name: Checkout aiter repo
         if: ${{ matrix.build_enabled }}
         uses: actions/checkout@v4
