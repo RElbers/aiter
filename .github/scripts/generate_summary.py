@@ -10,6 +10,7 @@ Markdown to $GITHUB_STEP_SUMMARY.
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -44,6 +45,16 @@ def _get_index_url(release_type: str, gpu_archs: str = "gfx942-gfx950") -> str |
     return f"https://{domain}/whl/{gpu_archs}/"
 
 
+def _index_arch_key(gpu_archs: str, build_targets: str) -> str:
+    """The built arch set as the index path names it, e.g. gfx942-gfx950.
+
+    Build targets override gpu_archs, so their arch names win when set.
+    """
+    entries = re.split(r"[;,]", build_targets or gpu_archs)
+    archs = {e.split(":")[0].strip().lower() for e in entries if e.strip()}
+    return "-".join(sorted(archs))
+
+
 def build_summary(summary: Path) -> None:
     docker_image = os.environ.get("SUMMARY_DOCKER_IMAGE", "unknown")
     python_version = os.environ.get("SUMMARY_PYTHON_VERSION", "unknown")
@@ -51,7 +62,7 @@ def build_summary(summary: Path) -> None:
     gpu_archs = os.environ.get("SUMMARY_GPU_ARCHS", "unknown")
     build_targets = os.environ.get("SUMMARY_BUILD_TARGETS", "")
     wheel_dir = os.environ.get("SUMMARY_WHEEL_DIR", "dist")
-    index_url = _get_index_url(release_type, gpu_archs.replace(";", "-"))
+    index_url = _get_index_url(release_type, _index_arch_key(gpu_archs, build_targets))
 
     _out(summary, f"## Build Summary - Python {python_version}")
     _out(summary)
