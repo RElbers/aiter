@@ -77,6 +77,55 @@ def test_unparseable_gpu_archs_defers_to_gpu_targets():
         assert archs == ["gfx950"], f"GPU_ARCHS={gpu_archs!r}: got {archs}"
 
 
+def test_gpu_archs_parses_the_same_everywhere():
+    from aiter.jit.utils import build_targets, chip_info
+
+    resolvers = (
+        build_targets.gpu_archs_env_names,
+        build_targets.get_build_targets_env,
+        chip_info.get_gfx_list,
+    )
+    with (
+        _target_env(GPU_ARCHS=" GFX942, gfx950;gfx942 "),
+        _cleared_cache(chip_info.get_gfx_list),
+    ):
+        archs = [resolve() for resolve in resolvers]
+
+    assert archs == [
+        ["gfx942", "gfx950"],
+        [("gfx942", 304), ("gfx950", 256)],
+        ["gfx942", "gfx950"],
+    ], archs
+
+    for gpu_archs in ("", " ; ", "native;gfx942"):
+        for resolve in resolvers:
+            with (
+                _target_env(GPU_ARCHS=gpu_archs),
+                _cleared_cache(chip_info.get_gfx_list),
+            ):
+                try:
+                    got = resolve()
+                except RuntimeError:
+                    continue
+            raise AssertionError(
+                f"GPU_ARCHS={gpu_archs!r}: {resolve.__name__} -> {got}"
+            )
+
+    # get_gfx_list runs at import, so an arch only some modules support must
+    # not fail it; resolving build targets is where unknown names are rejected.
+    for gpu_archs in ("gfx942;gfx1030", "gfx950;gfx942:xnack-"):
+        with (
+            _target_env(GPU_ARCHS=gpu_archs),
+            _cleared_cache(chip_info.get_gfx_list),
+        ):
+            assert chip_info.get_gfx_list() == gpu_archs.split(";"), gpu_archs
+            try:
+                got = build_targets.get_build_targets_env()
+            except RuntimeError:
+                continue
+        raise AssertionError(f"GPU_ARCHS={gpu_archs!r}: get_build_targets_env -> {got}")
+
+
 def test_template_cache_separates_architectures():
     import csrc.cpp_itfs.utils as cpp_utils
 
@@ -131,6 +180,7 @@ if __name__ == "__main__":
     test_opus_flags_follow_target_membership()
     test_gpu_archs_takes_the_live_cu_count()
     test_unparseable_gpu_archs_defers_to_gpu_targets()
+    test_gpu_archs_parses_the_same_everywhere()
     test_template_cache_separates_architectures()
     test_hsaco_lookup_uses_live_arch()
     print("ALL_PASS")

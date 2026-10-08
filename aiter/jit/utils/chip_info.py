@@ -253,14 +253,12 @@ def get_gfx_list() -> list[str]:
 
     gfxs = get_build_archs_env()
     if gfxs is None:
-        gfx_env = os.getenv("GPU_ARCHS", "native").strip().lower()
-        if gfx_env == "native":
+        gfxs = _parse_gpu_archs_env(os.getenv("GPU_ARCHS", "native"))
+        if gfxs == ["native"]:
             try:
                 gfxs = _detect_native()
             except RuntimeError:
                 gfxs = ["cpu"]
-        else:
-            gfxs = _parse_gpu_archs_env(gfx_env)
 
     os.environ["AITER_GPU_ARCHS"] = ";".join(gfxs)
 
@@ -348,7 +346,7 @@ def get_build_targets() -> list[tuple[str, int]]:
          get_build_targets_env() (no GPU needed), then replace the
          GFX_CU_NUM_MAP default with the live device's CU count for the matching
          arch (so a binned/partitioned part is not resolved to the full-SKU CU).
-      3. GPU_ARCHS unset, empty/whitespace, or "native" -> call get_gfx()
+      3. GPU_ARCHS unset or "native" -> call get_gfx()
          (GPU_ARCHS-aware; falls back to rocminfo/hipinfo when GPU_ARCHS is
          unset) and get_cu_num(), which correctly reflect partition mode and
          binned variants.

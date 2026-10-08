@@ -47,20 +47,43 @@ GFX_CU_NUM_MAP = {
 KNOWN_GFX = frozenset(v for v in GFX_MAP.values() if v != "native")
 
 
-def _parse_gpu_archs_env(gfx_env: str) -> list[str]:
-    """Split a GPU_ARCHS string into a list of non-empty architecture names.
+def _parse_gpu_archs_env(gfx_env: str, name: str = "GPU_ARCHS") -> list[str]:
+    """Split a GPU_ARCHS string into deduped architecture names.
 
-    Raises RuntimeError if no valid architecture names remain after splitting
-    on ';' and stripping whitespace — e.g. GPU_ARCHS=" ; " would otherwise
-    silently produce an empty target list and fall back to heuristic kernels.
+    Entries split on ';' or ',', as in AITER_GPU_TARGETS, and are case-folded.
+    "native" must stand alone, since it is resolved to the live device later.
+    Names are not checked against KNOWN_GFX here: this runs at import, where
+    an arch only some modules support must not fail every other module, so
+    the build entry points reject unknown names instead (see check_known_gfx).
+
+    Raises RuntimeError if no names remain (GPU_ARCHS=" ; " would otherwise
+    silently produce an empty target list and fall back to heuristic kernels),
+    or if "native" is combined with other names.
     """
-    archs = [g.strip().lower() for g in gfx_env.split(";") if g.strip()]
+    archs = list(
+        dict.fromkeys(
+            g.strip().lower() for g in re.split(r"[;,]", gfx_env) if g.strip()
+        )
+    )
     if not archs:
         raise RuntimeError(
-            f"GPU_ARCHS={gfx_env!r} contains no valid architecture names after splitting on ';'. "
-            f"Known targets: {list(GFX_CU_NUM_MAP.keys())}"
+            f"{name}={gfx_env!r} contains no valid architecture names after splitting on ';' or ','. "
+            f"Known targets: {sorted(KNOWN_GFX)}"
+        )
+    if "native" in archs and len(archs) > 1:
+        raise RuntimeError(
+            f"{name}={gfx_env!r}: 'native' cannot be combined with explicit archs."
         )
     return archs
+
+
+def check_known_gfx(archs: list[str], name: str = "GPU_ARCHS") -> None:
+    """Raise RuntimeError naming every entry of archs that is not in KNOWN_GFX."""
+    unknown = [a for a in archs if a not in KNOWN_GFX]
+    if unknown:
+        raise RuntimeError(
+            f"{name}: unknown gfx {unknown}. Known targets: {sorted(KNOWN_GFX)}"
+        )
 
 
 def _cu_num_or_none(value: str) -> int | None:
@@ -135,8 +158,11 @@ def get_build_archs_env() -> list[str] | None:
 
 
 def gpu_archs_env_names() -> list[str]:
-    """Arch names GPU_ARCHS explicitly requests, empty when unset or native."""
-    archs = _parse_gpu_archs_env(os.getenv("GPU_ARCHS") or "native")
+    """Arch names GPU_ARCHS explicitly requests, empty when unset or native.
+
+    A set but blank GPU_ARCHS raises, as everywhere else it is parsed.
+    """
+    archs = _parse_gpu_archs_env(os.getenv("GPU_ARCHS", "native"))
     return [a for a in archs if a != "native"]
 
 
@@ -156,7 +182,7 @@ def get_build_targets_env() -> list[tuple[str, int]]:
         return targets
 
     gfx_env = os.getenv("GPU_ARCHS")
-    if not gfx_env:
+    if gfx_env is None:
         raise RuntimeError(
             "Neither AITER_GPU_TARGETS nor GPU_ARCHS is set. "
             "Set GPU_ARCHS=gfx942 (or similar) to resolve build targets without a GPU."
@@ -168,13 +194,20 @@ def get_build_targets_env() -> list[tuple[str, int]]:
         if cu_override is None:
             raise RuntimeError(f"CU_NUM={cu_env!r} must be a positive integer.")
 
+    archs = _parse_gpu_archs_env(gfx_env)
+    if archs == ["native"]:
+        raise RuntimeError(
+            "GPU_ARCHS=native needs a live GPU to resolve. Name the arch, or use "
+            "chip_info.get_build_targets() for the live-GPU fallback."
+        )
+    check_known_gfx(archs)
     targets = []
-    for gfx in _parse_gpu_archs_env(gfx_env):
+    for gfx in archs:
         if gfx not in GFX_CU_NUM_MAP:
             raise RuntimeError(
-                f"Unknown gfx '{gfx}' in GPU_ARCHS — add it to "
-                f"GFX_CU_NUM_MAP in build_targets.py. Known targets: "
-                f"{list(GFX_CU_NUM_MAP.keys())}"
+                f"GPU_ARCHS: {gfx!r} has no default CU count — add it to "
+                f"GFX_CU_NUM_MAP in build_targets.py, or name the count with "
+                f"AITER_GPU_TARGETS='{gfx}:<cu_num>'."
             )
         targets.append((gfx, cu_override or GFX_CU_NUM_MAP[gfx]))
     return list(dict.fromkeys(targets))
