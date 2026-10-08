@@ -11,8 +11,8 @@ from build_targets import (
     GFX_CU_NUM_MAP,
     GFX_MAP,
     _cu_num_or_none,
+    _parse_build_targets_env,
     _parse_gpu_archs_env,
-    _parse_gpu_targets_env,
     filter_tune_df,
     get_build_archs_env,
     get_build_targets_env,
@@ -315,7 +315,7 @@ def get_cu_num():
 
 
 def _warn_cu_num_ignored(targets: list[tuple[str, int]]) -> None:
-    """Warn when CU_NUM names a count AITER_GPU_TARGETS did not build for."""
+    """Warn when CU_NUM names a count AITER_BUILD_TARGETS did not build for."""
     cu_env = os.getenv("CU_NUM")
     if not cu_env:
         return
@@ -323,7 +323,7 @@ def _warn_cu_num_ignored(targets: list[tuple[str, int]]) -> None:
     if cu_num is None or any(cu == cu_num for _, cu in targets):
         return
     logger.warning(
-        "CU_NUM=%s does not match any build target in AITER_GPU_TARGETS (%s). "
+        "CU_NUM=%s does not match any build target in AITER_BUILD_TARGETS (%s). "
         "The targets decide which kernels are built; CU_NUM still sets the "
         "count the runtime looks them up by, so every tuned shape falls back "
         "to the default kernel. Drop CU_NUM, or add a gfx:%s target.",
@@ -340,7 +340,7 @@ def get_build_targets() -> list[tuple[str, int]]:
     to exactly the right set of kernels for the target GPU(s).
 
     Priority:
-      1. AITER_GPU_TARGETS set -> delegate to get_build_targets_env(), which
+      1. AITER_BUILD_TARGETS set -> delegate to get_build_targets_env(), which
          reads it as (gfx, cu_num) pairs.
       2. GPU_ARCHS set to an explicit non-empty target list -> delegate to
          get_build_targets_env() (no GPU needed), then replace the
@@ -352,7 +352,7 @@ def get_build_targets() -> list[tuple[str, int]]:
          binned variants.
       4. Neither -> raise RuntimeError with a clear message.
     """
-    targets = _parse_gpu_targets_env()
+    targets = _parse_build_targets_env()
     if targets is not None:
         _warn_cu_num_ignored(targets)
         return targets
@@ -367,7 +367,7 @@ def get_build_targets() -> list[tuple[str, int]]:
         except Exception as e:  # noqa: BLE001
             logger.info(
                 "No live GPU to read a CU count from (%s); build targets %s take "
-                "the default count for their arch. Set CU_NUM or AITER_GPU_TARGETS "
+                "the default count for their arch. Set CU_NUM or AITER_BUILD_TARGETS "
                 "to pin a binned or partitioned part.",
                 e,
                 ", ".join(f"{gfx}:{cu}" for gfx, cu in targets),
@@ -380,7 +380,7 @@ def get_build_targets() -> list[tuple[str, int]]:
                 logger.info(
                     "Build target %s takes cu_num=%d from the live device "
                     "instead of the default %d; set CU_NUM or "
-                    "AITER_GPU_TARGETS to pin it.",
+                    "AITER_BUILD_TARGETS to pin it.",
                     gfx,
                     live_cu,
                     cu,
@@ -408,7 +408,7 @@ def _warn_unmatched_targets(tune_df, targets):
     logger.warning(
         "The tuned config CSV has no rows for build target(s) %s; every shape "
         "there falls back to the default kernel. Tune those targets, or drop "
-        "them from AITER_GPU_TARGETS / GPU_ARCHS.",
+        "them from AITER_BUILD_TARGETS / GPU_ARCHS.",
         ", ".join(missing),
     )
 

@@ -26,7 +26,7 @@ def test_runtime_arch_resolution():
     for gpu_target_string in gpu_target_strings:
         for live_gfx, expected_gfx in live_expected_gfxs:
             with (
-                _target_env(AITER_GPU_TARGETS=gpu_target_string),
+                _target_env(AITER_BUILD_TARGETS=gpu_target_string),
                 _cleared_cache(chip_info.get_gfx_custom_op_core),
                 mock.patch.object(chip_info, "_detect_native", return_value=[live_gfx]),
             ):
@@ -46,7 +46,7 @@ def test_opus_flags_follow_target_membership():
     }
     for gpu_target_string in ("gfx1250:256;gfx950:256", "gfx950:256;gfx1250:256"):
         with (
-            _target_env(AITER_GPU_TARGETS=gpu_target_string),
+            _target_env(AITER_BUILD_TARGETS=gpu_target_string),
             _cleared_cache(core.get_gfx_list),
         ):
             args = core.get_args_of_build("module_deepgemm_opus")
@@ -67,11 +67,11 @@ def test_gpu_archs_takes_the_live_cu_count():
     assert targets == [("gfx950", 128)], targets
 
 
-def test_unparseable_gpu_archs_defers_to_gpu_targets():
+def test_unparseable_gpu_archs_defers_to_build_targets():
     from aiter.jit import core
 
     for gpu_archs in ("   ", " ; "):
-        with _target_env(AITER_GPU_TARGETS="gfx950", GPU_ARCHS=gpu_archs):
+        with _target_env(AITER_BUILD_TARGETS="gfx950", GPU_ARCHS=gpu_archs):
             archs = core.validate_and_update_archs()
 
         assert archs == ["gfx950"], f"GPU_ARCHS={gpu_archs!r}: got {archs}"
@@ -132,7 +132,11 @@ def test_flydsl_aot_reads_arch_only_in_the_clis():
 
     # (env, run_aot targets, CLI targets). ARCH=64 is what conda-build exports.
     cases = (
-        ({"AITER_GPU_TARGETS": "gfx950:128", "ARCH": "gfx942"}, {"gfx950"}, {"gfx950"}),
+        (
+            {"AITER_BUILD_TARGETS": "gfx950:128", "ARCH": "gfx942"},
+            {"gfx950"},
+            {"gfx950"},
+        ),
         (
             {"ARCH": "gfx942,gfx1250", "GPU_ARCHS": "gfx950"},
             {"gfx950"},
@@ -212,7 +216,7 @@ def test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch():
         for gpu_archs in ("gfx942", "gfx950"):
             out_dir = Path(work_dir, gpu_archs)
             out_dir.mkdir()
-            env = {k: v for k, v in os.environ.items() if k != "AITER_GPU_TARGETS"}
+            env = {k: v for k, v in os.environ.items() if k != "AITER_BUILD_TARGETS"}
             subprocess.run(
                 [
                     sys.executable,
@@ -271,7 +275,7 @@ def test_hsaco_lookup_uses_live_arch():
 @contextlib.contextmanager
 def _target_env(**values):
     with mock.patch.dict(os.environ):
-        for name in ("AITER_GPU_TARGETS", "GPU_ARCHS", "CU_NUM"):
+        for name in ("AITER_BUILD_TARGETS", "GPU_ARCHS", "CU_NUM"):
             os.environ.pop(name, None)
         os.environ.update(values)
         yield
@@ -290,7 +294,7 @@ if __name__ == "__main__":
     test_runtime_arch_resolution()
     test_opus_flags_follow_target_membership()
     test_gpu_archs_takes_the_live_cu_count()
-    test_unparseable_gpu_archs_defers_to_gpu_targets()
+    test_unparseable_gpu_archs_defers_to_build_targets()
     test_gpu_archs_parses_the_same_everywhere()
     test_flydsl_aot_reads_arch_only_in_the_clis()
     test_flydsl_aot_runs_every_kind_through_target_selection()

@@ -99,7 +99,7 @@ def test_get_build_targets():
 
     orig_archs = os.environ.pop("GPU_ARCHS", None)
     orig_cu = os.environ.pop("CU_NUM", None)
-    orig_targets = os.environ.pop("AITER_GPU_TARGETS", None)
+    orig_targets = os.environ.pop("AITER_BUILD_TARGETS", None)
 
     try:
         # 1.1 Single known arch
@@ -156,48 +156,48 @@ def test_get_build_targets():
             "gfx942" in GFX_CU_NUM_MAP and "gfx950" in GFX_CU_NUM_MAP,
         )
 
-        # 1.8 AITER_GPU_TARGETS: two CU counts of one arch, which GPU_ARCHS
+        # 1.8 AITER_BUILD_TARGETS: two CU counts of one arch, which GPU_ARCHS
         # plus a single global CU_NUM cannot express.
         del os.environ["GPU_ARCHS"]
         targets_env = f"{TARGET_B[0]}:{TARGET_B[1]};{TARGET_D[0]}:{TARGET_D[1]}"
-        os.environ["AITER_GPU_TARGETS"] = targets_env
+        os.environ["AITER_BUILD_TARGETS"] = targets_env
         t = get_build_targets_env()
         _check(
-            f"AITER_GPU_TARGETS={targets_env} → two targets same gfx",
+            f"AITER_BUILD_TARGETS={targets_env} → two targets same gfx",
             t == [TARGET_B, TARGET_D],
             str(t),
         )
 
         # 1.9 Exact duplicates are removed without changing caller order.
-        os.environ["AITER_GPU_TARGETS"] = (
+        os.environ["AITER_BUILD_TARGETS"] = (
             f"{TARGET_D[0]}:{TARGET_D[1]},{TARGET_B[0]}:{TARGET_B[1]};"
             f"{TARGET_D[0]}:{TARGET_D[1]}"
         )
         t = get_build_targets_env()
         _check(
-            "AITER_GPU_TARGETS preserves first-occurrence order",
+            "AITER_BUILD_TARGETS preserves first-occurrence order",
             t == [TARGET_D, TARGET_B],
             str(t),
         )
 
         # 1.10 Bare entry falls back to the GFX_CU_NUM_MAP default
-        os.environ["AITER_GPU_TARGETS"] = TARGET_B[0]
+        os.environ["AITER_BUILD_TARGETS"] = TARGET_B[0]
         t = get_build_targets_env()
         _check(
-            f"AITER_GPU_TARGETS={TARGET_B[0]} → [{TARGET_B}]", t == [TARGET_B], str(t)
+            f"AITER_BUILD_TARGETS={TARGET_B[0]} → [{TARGET_B}]", t == [TARGET_B], str(t)
         )
 
         # 1.11 Wins over a conflicting GPU_ARCHS + CU_NUM
         os.environ["GPU_ARCHS"] = TARGET_A[0]
         os.environ["CU_NUM"] = str(TARGET_C[1])
-        os.environ["AITER_GPU_TARGETS"] = f"{TARGET_D[0]}:{TARGET_D[1]}"
+        os.environ["AITER_BUILD_TARGETS"] = f"{TARGET_D[0]}:{TARGET_D[1]}"
         t = get_build_targets_env()
         _check(
-            "AITER_GPU_TARGETS wins over GPU_ARCHS + CU_NUM", t == [TARGET_D], str(t)
+            "AITER_BUILD_TARGETS wins over GPU_ARCHS + CU_NUM", t == [TARGET_D], str(t)
         )
         del os.environ["GPU_ARCHS"]
         del os.environ["CU_NUM"]
-        del os.environ["AITER_GPU_TARGETS"]
+        del os.environ["AITER_BUILD_TARGETS"]
 
         # 1.12 Live GPU fallback — requires torch and a GPU; skipped otherwise
         try:
@@ -224,9 +224,9 @@ def test_get_build_targets():
         elif "CU_NUM" in os.environ:
             del os.environ["CU_NUM"]
         if orig_targets is not None:
-            os.environ["AITER_GPU_TARGETS"] = orig_targets
-        elif "AITER_GPU_TARGETS" in os.environ:
-            del os.environ["AITER_GPU_TARGETS"]
+            os.environ["AITER_BUILD_TARGETS"] = orig_targets
+        elif "AITER_BUILD_TARGETS" in os.environ:
+            del os.environ["AITER_BUILD_TARGETS"]
 
 
 # ---------------------------------------------------------------------------

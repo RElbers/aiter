@@ -696,7 +696,7 @@ if multiprocessing.current_process().name == "MainProcess":
 
 
 def validate_and_update_archs():
-    # AITER_GPU_TARGETS is authoritative for the arch set; a conflicting
+    # AITER_BUILD_TARGETS is authoritative for the arch set; a conflicting
     # GPU_ARCHS warns and loses.
     named = get_build_archs_env()
     if named is not None:
@@ -705,13 +705,13 @@ def validate_and_update_archs():
             explicit = set(gpu_archs_env_names())
         except RuntimeError as e:
             logger.warning(
-                f"Ignoring GPU_ARCHS, AITER_GPU_TARGETS takes precedence: {e}"
+                f"Ignoring GPU_ARCHS, AITER_BUILD_TARGETS takes precedence: {e}"
             )
             explicit = set()
         if explicit and explicit != set(archs):
             logger.warning(
                 f"GPU_ARCHS={sorted(explicit)} disagrees with "
-                f"AITER_GPU_TARGETS={archs}; compiling for {archs}."
+                f"AITER_BUILD_TARGETS={archs}; compiling for {archs}."
             )
     else:
         archs = _parse_gpu_archs_env(os.getenv("GPU_ARCHS", "native"))

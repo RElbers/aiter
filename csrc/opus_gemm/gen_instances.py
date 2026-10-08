@@ -1223,7 +1223,7 @@ if __name__ == "__main__":
                 out.append(path)
         return out
 
-    # Build targets, resolved as in aiter/jit/core.py (AITER_GPU_TARGETS, then
+    # Build targets, resolved as in aiter/jit/core.py (AITER_BUILD_TARGETS, then
     # GPU_ARCHS, then the live GPU). With none of them, every arch is built.
     # Kids are filtered by arch only: opus fails a launch whose tuned kid is not
     # compiled instead of falling back, and a GPU-free build cannot know the CU

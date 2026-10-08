@@ -78,11 +78,11 @@ Environment Variables
    * - ``GPU_ARCHS``
      - Target GPU architecture(s), semicolon-separated. Use ``native`` to auto-detect.
      - ``native``
-   * - ``AITER_GPU_TARGETS``
-     - Build targets as ``gfx:cu_num``, semicolon-separated. Overrides ``GPU_ARCHS``, and is used instead of ``CU_NUM`` for the build. Needed only for SKUs of one architecture that differ in CU count.
+   * - ``AITER_BUILD_TARGETS``
+     - Build targets as ``gfx:cu_num``, semicolon-separated. Overrides ``GPU_ARCHS``, and is used instead of ``CU_NUM`` for the build. Needed only for SKUs of one architecture that differ in CU count. Also read at runtime: aiter dispatches for the live GPU's arch when it is a target, and otherwise for one of the targets.
      - unset
    * - ``CU_NUM``
-     - Compute-unit count. Pairs with ``GPU_ARCHS`` to pick which tuned rows are built, and overrides the live count the runtime uses to look kernels up. ``AITER_GPU_TARGETS`` replaces it for the build, but ``CU_NUM`` still applies at runtime.
+     - Compute-unit count. Pairs with ``GPU_ARCHS`` to pick which tuned rows are built, and overrides the live count the runtime uses to look kernels up. ``AITER_BUILD_TARGETS`` replaces it for the build, but ``CU_NUM`` still applies at runtime.
      - live device
    * - ``PREBUILD_KERNELS``
      - ``0`` = JIT only, ``1`` = core kernels, ``2`` = inference kernels, ``3`` = MHA only
@@ -98,7 +98,7 @@ Build Target Resolution
    :header-rows: 1
    :widths: 25 20 15 40
 
-   * - ``AITER_GPU_TARGETS``
+   * - ``AITER_BUILD_TARGETS``
      - ``GPU_ARCHS``
      - ``CU_NUM``
      - Build targets
@@ -156,10 +156,10 @@ Example Configurations
    GPU_ARCHS="gfx950" python3 setup.py install
 
    # For MI350 at 128 CUs
-   AITER_GPU_TARGETS="gfx950:128" python3 setup.py install
+   AITER_BUILD_TARGETS="gfx950:128" python3 setup.py install
 
    # For both MI350 CU counts in one build
-   AITER_GPU_TARGETS="gfx950:128;gfx950:256" python3 setup.py install
+   AITER_BUILD_TARGETS="gfx950:128;gfx950:256" python3 setup.py install
 
 Method 3: Docker
 ^^^^^^^^^^^^^^^^

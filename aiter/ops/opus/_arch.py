@@ -24,7 +24,7 @@ failure mode:
 Detection order (shared by both helpers), as
 ``aiter.jit.utils.chip_info.get_gfx_list`` resolves the build targets:
 
-1. ``AITER_GPU_TARGETS`` arch names, when set.
+1. ``AITER_BUILD_TARGETS`` arch names, when set.
 2. An explicit ``GPU_ARCHS`` list. This path covers build-only hosts
    (no GPU) and CI workflows that pin the archs explicitly.
 3. ``GPU_ARCHS=native`` (default) -> probe the live GPU.
@@ -70,7 +70,7 @@ def _detect_arch(
     """
     supported_set = {a.lower() for a in supported}
 
-    # The build targets, resolved as in aiter/jit/core.py: AITER_GPU_TARGETS,
+    # The build targets, resolved as in aiter/jit/core.py: AITER_BUILD_TARGETS,
     # then an explicit GPU_ARCHS -- which handles build-only hosts and
     # multi-arch wheels where ``rocminfo`` cannot tell which arch was built --
     # then the live GPU.

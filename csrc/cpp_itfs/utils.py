@@ -96,7 +96,7 @@ sys.path.insert(0, os.path.join(AITER_PYTHON_ROOT_DIR, "aiter", "jit", "utils"))
 from build_targets import KNOWN_GFX
 from chip_info import get_gfx_list, get_gfx_runtime
 
-# AITER_GPU_TARGETS outranks GPU_ARCHS for the arch set, as in aiter/jit/core.py.
+# AITER_BUILD_TARGETS outranks GPU_ARCHS for the arch set, as in aiter/jit/core.py.
 # HSACO paths are keyed separately by the live GPU.
 BUILD_ARCHS = get_gfx_list()
 # The ';'-joined string this module exported before BUILD_ARCHS; nothing here reads it.
@@ -219,7 +219,7 @@ def hip_flag_checker(flag_hip: str) -> bool:
 def validate_and_update_archs():
     if BUILD_ARCHS == ["cpu"]:
         raise RuntimeError(
-            "No GPU detected and neither AITER_GPU_TARGETS nor GPU_ARCHS names "
+            "No GPU detected and neither AITER_BUILD_TARGETS nor GPU_ARCHS names "
             "an arch. Set GPU_ARCHS=gfx942 (or similar) to build without a GPU."
         )
     unknown = [arch for arch in BUILD_ARCHS if arch not in KNOWN_GFX]

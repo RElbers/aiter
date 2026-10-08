@@ -61,7 +61,7 @@ def cu_num_to_arch(cu_num: int, default: str = "gfx950") -> str:
 def requested_archs(arch_env: str | None = None) -> set[str] | None:
     """Arch names to AOT-compile for, or None to compile every arch.
 
-    The build targets as aiter/jit/core.py resolves them: AITER_GPU_TARGETS,
+    The build targets as aiter/jit/core.py resolves them: AITER_BUILD_TARGETS,
     then GPU_ARCHS, then the live GPU. arch_env, which only the per-module
     CLIs pass (see cli_requested_archs), stands in for GPU_ARCHS when given.
     """

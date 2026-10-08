@@ -98,8 +98,8 @@ python -m aiter.aot.flydsl.chunk_gdn_h --csv /path/to/tuned.csv
 | `AITER_FLYDSL_AOT_TIMEOUT` | Per-kernel wall-clock cap (seconds). A worker stuck *alive* past this is killed (and retried); `0` disables. | `1200` |
 | `AITER_FLYDSL_AOT_MAX_RETRIES` | Retries for a worker that **died abnormally** (OOM-kill / segfault / timeout-kill). A clean compile error is never retried. `0` disables. | `2` |
 | `AITER_CONFIGS` | Resolves the default CSV lookup path (same as the runtime JIT) | repo built-in |
-| `AITER_GPU_TARGETS` / `GPU_ARCHS` | Select which jobs to build, not what arch a job compiles *for* (that comes from the CSV's `gfx` / `cu_num`). Resolved as for the JIT build (`AITER_GPU_TARGETS`, then `GPU_ARCHS`, then the live GPU) and applied to every kind in the `setup.py` path (`run_aot`) and in the CSV-driven `python -m` CLIs; the `mega_moe` and `fmha_fp8` CLIs compile exactly the shapes passed to them. With no target and no GPU, every arch is built. | live GPU |
-| `ARCH` | CSV-driven `python -m` CLIs only: stands in for `GPU_ARCHS`, below `AITER_GPU_TARGETS`. `run_aot` ignores it, since other build tools set it (conda-build exports `ARCH=64`); a value naming no gfx arch is ignored. | unset |
+| `AITER_BUILD_TARGETS` / `GPU_ARCHS` | Select which jobs to build, not what arch a job compiles *for* (that comes from the CSV's `gfx` / `cu_num`). Resolved as for the JIT build (`AITER_BUILD_TARGETS`, then `GPU_ARCHS`, then the live GPU) and applied to every kind in the `setup.py` path (`run_aot`) and in the CSV-driven `python -m` CLIs; the `mega_moe` and `fmha_fp8` CLIs compile exactly the shapes passed to them. With no target and no GPU, every arch is built. | live GPU |
+| `ARCH` | CSV-driven `python -m` CLIs only: stands in for `GPU_ARCHS`, below `AITER_BUILD_TARGETS`. `run_aot` ignores it, since other build tools set it (conda-build exports `ARCH=64`); a value naming no gfx arch is ignored. | unset |
 
 > **About the compile target arch.** The arch each kernel is actually compiled
 > for is derived per-job from the CSV's `cu_num` column (`cu_num_to_arch(...)`)
