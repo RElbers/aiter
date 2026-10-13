@@ -64,7 +64,8 @@ def _resolve_dispatch_arch(archs: list[str]) -> str:
     """The live arch when it is among archs, else the order-independent max.
 
     A target list is not a dispatch order, so the fallback is lexicographic
-    (which makes 'gfx950' the max over 'gfx1250') rather than last-entry.
+    rather than last-entry. That makes 'gfx950' the max over 'gfx1250', the
+    newest arch the single-arch codegen tables branch on.
     """
     try:
         live_gfx = _detect_native()[0]
