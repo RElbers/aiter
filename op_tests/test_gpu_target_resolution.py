@@ -231,22 +231,19 @@ def test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch():
         for gpu_archs in ("gfx942", "gfx950"):
             out_dir = Path(work_dir, gpu_archs)
             out_dir.mkdir()
-            env = {k: v for k, v in os.environ.items() if k != "AITER_BUILD_TARGETS"}
             subprocess.run(
                 [
                     sys.executable,
                     Path(_REPO_ROOT, "csrc/opus_gemm/gen_instances.py"),
                     "--working_path",
                     out_dir,
+                    f"--archs={gpu_archs}",
                     "--tune_files",
                     csv_path,
                 ],
                 check=True,
                 capture_output=True,
                 cwd=work_dir,
-                # CU_NUM pins the default count, so a gfx942:80 host cannot mask a
-                # CU filter by substituting its live count.
-                env={**env, "GPU_ARCHS": gpu_archs, "CU_NUM": "304"},
             )
             compiled[gpu_archs] = set(
                 json.loads(Path(out_dir, "compiled_kids.json").read_text())

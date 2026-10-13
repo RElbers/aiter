@@ -4,22 +4,11 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
-import sys
 from pathlib import Path
 
 import pandas as pd
-
-this_dir = os.path.dirname(os.path.abspath(__file__))
-AITER_CORE_DIR = (
-    os.path.join(os.path.abspath(f"{this_dir}/../../../"), "aiter/jit/utils")
-    if os.path.exists(
-        os.path.join(os.path.abspath(f"{this_dir}/../../../"), "aiter_meta")
-    )
-    else os.path.abspath(f"{this_dir}/../../aiter/jit/utils")
-)
-sys.path.insert(0, AITER_CORE_DIR)
-from chip_info import get_gfx_list
 from codegen import gen_instances_gfx942 as _gfx942  # noqa: F401
 
 # Architecture modules register their code emitters at import time.
@@ -1124,6 +1113,17 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--archs",
+        default="",
+        required=False,
+        help=(
+            "Archs to build, separated by ',' or ';' "
+            '(e.g. "gfx942", "gfx942,gfx950"). The JIT passes the arches it '
+            "builds for. Empty, the default, builds every arch."
+        ),
+    )
+
+    parser.add_argument(
         "--tune_files",
         default=None,
         required=False,
@@ -1223,14 +1223,12 @@ if __name__ == "__main__":
                 out.append(path)
         return out
 
-    # Build targets, resolved as in aiter/jit/core.py (AITER_BUILD_TARGETS, then
-    # GPU_ARCHS, then the live GPU). With none of them, every arch is built.
     # Kids are filtered by arch only: opus fails a launch whose tuned kid is not
     # compiled instead of falling back, and a GPU-free build cannot know the CU
-    # count of the parts it targets.
-    target_arches = set(get_gfx_list())
-    if target_arches == {"cpu"}:
-        target_arches = None
+    # count of the parts it targets. get_gfx_list() reports "cpu" when it finds
+    # no GPU and no target, which builds every arch like an empty --archs.
+    archs = {a.strip().lower() for a in re.split(r"[;,]", args.archs) if a.strip()}
+    target_arches = (archs - {"cpu"}) or None
 
     csv_kids: set[int] = set()
     csv_paths = _expand_tune_paths(args.tune_files)
