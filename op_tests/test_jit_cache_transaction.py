@@ -1151,7 +1151,8 @@ with open(os.path.join(args.output_dir, "generated.cpp"), "w") as output:
             side_effect=lambda arches: {1} if arches == {"gfx942"} else {1, 200}
         )
         self.tuner_imports["opus_gemm_common"].default_compiled_kids_for_arch = defaults
-        self.assertFalse(tuner({7}))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(tuner({7}))
         defaults.assert_called_once_with({"gfx942"})
         self.assertEqual(calls, [])
 
