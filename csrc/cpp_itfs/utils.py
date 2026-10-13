@@ -236,6 +236,8 @@ def template_archs():
     """The live GPU's arch for template libraries; the build targets without a GPU."""
     try:
         return [get_gfx_runtime()]
+    # Only "no GPU" falls back: an unknown live GPU raises KeyError, since a
+    # library built for other archs could not run on it.
     except RuntimeError:
         return validate_and_update_archs()
 
