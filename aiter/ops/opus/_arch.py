@@ -21,20 +21,19 @@ failure mode:
   external script that should refuse to start) can call
   :func:`_check_arch` directly.
 
-Detection order (shared by both helpers):
+Detection order (shared by both helpers), as
+``aiter.jit.utils.chip_info.get_gfx_list`` resolves the build targets:
 
-1. ``GPU_ARCHS`` env var (split on ``';'``). Skips the special
-   ``'native'`` token. This path covers build-only hosts (no GPU) and
-   CI workflows that pin GPU_ARCHS explicitly.
-2. ``GPU_ARCHS=native`` (default) -> probe ``rocminfo`` via
-   ``aiter.jit.utils.chip_info.get_gfx_runtime``.
-3. ``rocminfo`` unavailable (no GPU / CPU host) -> log debug and treat
-   as "unknown"; the host-side dispatcher in ``opus_gemm.cu`` catches
-   the unsupported device at call time.
+1. ``AITER_BUILD_TARGETS`` arch names, when set.
+2. An explicit ``GPU_ARCHS`` list. This path covers build-only hosts
+   (no GPU) and CI workflows that pin the archs explicitly.
+3. ``GPU_ARCHS=native`` (default) -> probe the live GPU.
+4. No GPU detected (CPU host) -> log debug and treat as "unknown"; the
+   host-side dispatcher in ``opus_gemm.cu`` catches the unsupported
+   device at call time.
 """
 
 import logging
-import os
 from collections.abc import Iterable
 
 import torch
@@ -65,42 +64,35 @@ def _detect_arch(
     (ok, detected) : tuple
         ``ok`` is ``True`` iff a supported arch was detected. ``detected``
         is a human-readable string describing what we saw (the matching
-        arch when ``ok`` is True; the full ``GPU_ARCHS`` env value, the
-        rocminfo arch, or ``None`` for "unknown / probe failed" otherwise).
+        arch when ``ok`` is True; the ';'-joined build targets, or ``None``
+        for "unknown / probe failed" otherwise).
         Never raises.
     """
     supported_set = {a.lower() for a in supported}
 
-    gpu_archs_env = os.getenv("GPU_ARCHS", "native").strip()
-    explicit_archs = [
-        a.strip().lower()
-        for a in gpu_archs_env.split(";")
-        if a.strip() and a.strip() != "native"
-    ]
-    # Path 1: GPU_ARCHS lists explicit arch(es). Use that as the source of
-    # truth -- handles build-only hosts and multi-arch wheel scenarios where
-    # ``rocminfo`` cannot tell us which arch the wheel was built for.
-    if explicit_archs:
-        match = next((a for a in explicit_archs if a in supported_set), None)
-        if match is not None:
-            return True, match
-        return False, gpu_archs_env
-
-    # Path 2: GPU_ARCHS='native' (default). Probe rocminfo.
+    # The build targets, resolved as in aiter/jit/core.py: AITER_BUILD_TARGETS,
+    # then an explicit GPU_ARCHS -- which handles build-only hosts and
+    # multi-arch wheels where ``rocminfo`` cannot tell which arch was built --
+    # then the live GPU.
     try:
-        from aiter.jit.utils.chip_info import get_gfx_runtime
+        from aiter.jit.utils.chip_info import get_gfx_list
 
-        gfx = get_gfx_runtime().lower()
+        archs = [a for a in get_gfx_list() if a != "cpu"]
     except Exception as e:  # noqa: BLE001
         logger.debug(
-            "opus: arch probe could not query rocminfo (%s). "
+            "opus: arch probe could not resolve the build targets (%s). "
             "Treating as unknown; downstream host dispatcher will catch "
             "unsupported devices at call time.",
             e,
         )
         return False, None
+    if not archs:
+        return False, None
 
-    return (gfx in supported_set), gfx
+    match = next((a for a in archs if a in supported_set), None)
+    if match is not None:
+        return True, match
+    return False, ";".join(archs)
 
 
 def _check_arch(

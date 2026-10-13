@@ -501,8 +501,9 @@ else:
 
 # Name-based reverse lookup for get_tune_dict() — built once at import time
 # Must include kernels from ALL arches, not just the current get_gfx() arch.
-# In a multi-target build (GPU_ARCHS=gfx942;gfx950), get_gfx() returns only the
-# last entry, but build_tune_dict processes CSV rows for all build targets.
+# In a multi-target build (GPU_ARCHS=gfx942;gfx950), get_gfx() returns only one
+# arch (the live one if targeted, else the max), but build_tune_dict processes CSV
+# rows for all build targets.
 # Note: cannot use {**a, **b} merge — both arches use overlapping integer IDs,
 # which would drop entries. Collect values from both dicts instead.
 kernels_by_name = {

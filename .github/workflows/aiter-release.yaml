@@ -82,6 +82,11 @@ on:
         type: string
         required: false
         default: 'gfx942;gfx950'
+      build_targets:
+        description: 'Explicit gfx:cu_num build targets; overrides gpu_archs when set'
+        type: string
+        required: false
+        default: ''
       runner:
         description: 'Build host'
         type: string
@@ -162,6 +167,9 @@ jobs:
       BUILD_DOCKER_IMAGE: ${{ matrix.docker_image }}
       PYTHON_VERSION: ${{ matrix.python_version }}
       GPU_ARCHS: ${{ inputs.gpu_archs || github.event.inputs.gpu_archs }}
+      # workflow_call only, since workflow_dispatch is at GitHub's 10-input cap;
+      # blank resolves to unset, leaving GPU_ARCHS in charge of target selection.
+      AITER_BUILD_TARGETS: ${{ inputs.build_targets || '' }}
       RELEASE_TYPE: ${{ inputs.release_type || github.event.inputs.release_type || 'none' }}
       ADD_DATE_STAMP: ${{ inputs.add_date_stamp || github.event.inputs.add_date_stamp }}
       USE_MANYLINUX: ${{ inputs.use_manylinux || github.event.inputs.use_manylinux || (startsWith(matrix.docker_image, 'pytorch/manylinux') && 'true') || 'false' }}
@@ -174,6 +182,25 @@ jobs:
       DOCKER_LOGIN: ${{ inputs.docker_login }}
 
     steps:
+      # The S3 upload below always publishes to whl-staging/gfx942-gfx950, so a
+      # wheel built for any other arch set would land under the wrong index.
+      - name: Check the build arches match the publish path
+        if: ${{ matrix.build_enabled && env.RELEASE_TYPE != 'none' && github.repository_owner == 'ROCm' && !github.event.pull_request.head.repo.fork }}
+        run: |
+          if [[ -n "${AITER_BUILD_TARGETS}" ]]; then
+            source="build_targets=${AITER_BUILD_TARGETS}"
+            requested="${AITER_BUILD_TARGETS}"
+          else
+            source="gpu_archs=${GPU_ARCHS}"
+            requested="${GPU_ARCHS}"
+          fi
+          archs=$(echo "${requested}" | tr ',;' '\n\n' | sed 's/:.*//; s/[[:space:]]//g' \
+            | tr '[:upper:]' '[:lower:]' | grep -v '^$' | sort -u | paste -sd';')
+          if [[ "${archs}" != "gfx942;gfx950" ]]; then
+            echo "::error::${source} builds for '${archs}', but wheels publish to whl-staging/gfx942-gfx950. Build for exactly gfx942 and gfx950, or set release_type to none."
+            exit 1
+          fi
+
       - name: Checkout aiter repo
         if: ${{ matrix.build_enabled }}
         uses: actions/checkout@v4
@@ -305,6 +332,7 @@ jobs:
             -e SETUPTOOLS_SCM_PRETEND_VERSION="${{ steps.version.outputs.nightly_version }}" \
             -e PREBUILD_KERNELS=1 \
             -e GPU_ARCHS="${{ env.GPU_ARCHS }}" \
+            -e AITER_BUILD_TARGETS="${{ env.AITER_BUILD_TARGETS }}" \
             -w /workspace \
             aiter_build_${{ matrix.python_version }} \
             bash -c "python3 setup.py bdist_wheel && ls dist/*.whl"
@@ -312,6 +340,7 @@ jobs:
             docker exec \
             -e PREBUILD_KERNELS=1 \
             -e GPU_ARCHS="${{ env.GPU_ARCHS }}" \
+            -e AITER_BUILD_TARGETS="${{ env.AITER_BUILD_TARGETS }}" \
             -w /workspace \
             aiter_build_${{ matrix.python_version }} \
             bash -c "python3 setup.py bdist_wheel && ls dist/*.whl"
@@ -412,6 +441,7 @@ jobs:
             -e SETUPTOOLS_SCM_PRETEND_VERSION="${PRETEND_VER}" \
             -e PREBUILD_KERNELS=1 \
             -e GPU_ARCHS="${GPU_ARCHS}" \
+            -e AITER_BUILD_TARGETS="${AITER_BUILD_TARGETS}" \
             -e PYBIN="${PYBIN}" \
             -w /workspace \
             aiter_build_${{ matrix.python_version }} \
@@ -559,6 +589,7 @@ jobs:
           SUMMARY_PYTHON_VERSION: ${{ matrix.python_version }}
           SUMMARY_RELEASE_TYPE: ${{ env.RELEASE_TYPE }}
           SUMMARY_GPU_ARCHS: ${{ env.GPU_ARCHS }}
+          SUMMARY_BUILD_TARGETS: ${{ env.AITER_BUILD_TARGETS }}
           SUMMARY_WHEEL_DIR: dist
         run: |
           if [ -f .github/scripts/generate_summary.py ]; then

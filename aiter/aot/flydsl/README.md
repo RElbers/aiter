@@ -98,14 +98,29 @@ python -m aiter.aot.flydsl.chunk_gdn_h --csv /path/to/tuned.csv
 | `AITER_FLYDSL_AOT_TIMEOUT` | Per-kernel wall-clock cap (seconds). A worker stuck *alive* past this is killed (and retried); `0` disables. | `1200` |
 | `AITER_FLYDSL_AOT_MAX_RETRIES` | Retries for a worker that **died abnormally** (OOM-kill / segfault / timeout-kill). A clean compile error is never retried. `0` disables. | `2` |
 | `AITER_CONFIGS` | Resolves the default CSV lookup path (same as the runtime JIT) | repo built-in |
-| `ARCH` / `GPU_ARCHS` | Selects which jobs to build, not what arch a job compiles *for* (that comes from the CSV's `cu_num`). `conv.py` applies it inside `parse_csv`, so both `python -m` and the `setup.py` path (`run_aot`) honour it. `gemm.py` still filters in `main()` only, so `run_aot` builds all of its archs. | auto-detect |
+
+#### Archs to compile for
+
+These choose which jobs to build, not what arch a job compiles *for* (see the
+note below). They resolve as for the JIT build, highest precedence first, and
+apply to every kind in the `setup.py` path (`run_aot`) and in the CSV-driven
+`python -m` CLIs; the `mega_moe` and `fmha_fp8` CLIs compile exactly the shapes
+passed to them. With none set, the live GPU is used; with no GPU either, every
+arch is built.
+
+| Variable | Value | Example |
+| --- | --- | --- |
+| `AITER_BUILD_TARGETS` | Build targets as `gfx:cu_num`, separated by `;` or `,` | `gfx942:304;gfx950:256` |
+| `ARCH` | Arch names. CSV-driven `python -m` CLIs only: `run_aot` ignores it, since other build tools set it (conda-build exports `ARCH=64`), and a value naming no gfx arch is ignored. | `gfx942;gfx950` |
+| `GPU_ARCHS` | Arch names, separated by `;` or `,` | `gfx942;gfx950` |
 
 > **About the compile target arch.** The arch each kernel is actually compiled
-> for is derived per-job from the CSV's `cu_num` column (`cu_num_to_arch(...)`)
-> and applied internally via `FLYDSL_GPU_ARCH`. That internal var is overwritten
-> for every job, so setting `ARCH` / `GPU_ARCHS` / `FLYDSL_GPU_ARCH` in your shell
-> does **not** change what gets built. To cross-compile, edit the `cu_num`
-> column in the CSV.
+> for comes from the CSV row: its `gfx` column, or for rows without one its
+> `cu_num` (`cu_num_to_arch(...)`). The mxfp4 MoE, mega MoE and fp8 FMHA kernels
+> are gfx950-only. The arch is applied internally via `FLYDSL_GPU_ARCH`, which is
+> overwritten for every job, so setting `FLYDSL_GPU_ARCH` in your shell does
+> **not** change the arch a job is compiled for; the variables above only choose
+> which jobs run. To cross-compile, edit the `gfx` (or `cu_num`) column in the CSV.
 
 Example:
 
