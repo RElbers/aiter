@@ -24,10 +24,9 @@ from csrc.cpp_itfs.gluon_aot_tools.compile_gluon import (
 from csrc.cpp_itfs.torch_utils import torch_to_c_types
 from csrc.cpp_itfs.utils import (
     AITER_CORE_DIR,
+    BUILD_DIR,
     compile_template_op,
-    get_arch_key,
     get_default_func_name,
-    get_template_build_dir,
     logger,
     mp_lock,
     not_built,
@@ -270,8 +269,7 @@ def compile(
             gluon_kernel_name = "paged_attention_decode_v2_gluon_large_block_dot_kernel"
 
         current_dir = os.getcwd()
-        build_cache_dir = get_template_build_dir(func_name)
-        aot_file_dir = os.path.join(current_dir, f"{func_name}_{get_arch_key()}")
+        aot_file_dir = f"{current_dir}/{func_name}"
         os.makedirs(aot_file_dir, exist_ok=True)
 
         compile_args = CompileGluonArgs(
@@ -330,8 +328,7 @@ def compile(
             out_name=f"{MD_NAME}_stage2",
         )
 
-        # Both temporary outputs and the outer lock are architecture-scoped so
-        # concurrent cross-arch builds cannot overwrite or clean each other.
+        # Create lock directory and lock path
         lock_path = os.path.join(aot_file_dir, "lock_triton_aot_compile")
         start_ts = time.perf_counter()
 
@@ -400,8 +397,8 @@ def compile(
             if result.returncode != 0 and result.stderr:
                 print(f"Warning: {result.stderr}")
             print("Cleaning aot temporary files completed!")
-            print(f"Cleaning aiter build cache directory: {build_cache_dir}")
-            clean_directory_except_so(build_cache_dir)
+            print(f"Cleaning aiter build cache directory: {BUILD_DIR}/{func_name}")
+            clean_directory_except_so(f"{BUILD_DIR}/{func_name}")
             print(
                 "Cleaning aiter build cache directory completed, only *.so files are left!"
             )

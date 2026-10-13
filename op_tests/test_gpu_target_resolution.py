@@ -256,27 +256,25 @@ def test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch():
     assert not row_kids & compiled["gfx950"], sorted(row_kids & compiled["gfx950"])
 
 
-def test_template_cache_separates_architectures():
+def test_template_libraries_compile_for_the_live_gpu():
     import csrc.cpp_itfs.utils as cpp_utils
 
-    # One multi-target build shared by a gfx942 host, a gfx950 host and a host
-    # with no GPU: (live GPU probe, archs compiled, cache folder).
+    # A template library is compiled on first use for the GPU that loads it,
+    # whatever the build targets; they stand in only when no GPU is visible.
+    # (live GPU probe, archs compiled)
     no_gpu = mock.Mock(side_effect=RuntimeError("no GPU"))
     cases = (
-        (mock.Mock(return_value="gfx942"), ["gfx942"], "gfx942"),
-        (mock.Mock(return_value="gfx950"), ["gfx950"], "gfx950"),
-        (no_gpu, ["gfx942", "gfx950"], "gfx942+gfx950"),
+        (mock.Mock(return_value="gfx950"), ["gfx950"]),
+        (mock.Mock(return_value="gfx1250"), ["gfx1250"]),
+        (no_gpu, ["gfx942", "gfx950"]),
     )
-    for get_gfx_runtime, archs, folder in cases:
+    for get_gfx_runtime, archs in cases:
         with (
             mock.patch.object(cpp_utils, "BUILD_ARCHS", ["gfx942", "gfx950"]),
             mock.patch.object(cpp_utils, "get_gfx_runtime", get_gfx_runtime),
             _cleared_cache(cpp_utils.template_archs),
-            _cleared_cache(cpp_utils.get_arch_key),
         ):
-            assert cpp_utils.template_archs() == archs, folder
-            build_dir = cpp_utils.get_template_build_dir("op")
-            assert build_dir.endswith(f"/template_libs/{folder}/op"), build_dir
+            assert cpp_utils.template_archs() == archs, archs
 
 
 def test_hsaco_lookup_uses_live_arch():
@@ -323,6 +321,6 @@ if __name__ == "__main__":
     test_flydsl_aot_reads_arch_only_in_the_clis()
     test_flydsl_aot_runs_every_kind_through_target_selection()
     test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch()
-    test_template_cache_separates_architectures()
+    test_template_libraries_compile_for_the_live_gpu()
     test_hsaco_lookup_uses_live_arch()
     print("ALL_PASS")

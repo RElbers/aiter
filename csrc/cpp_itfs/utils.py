@@ -240,20 +240,8 @@ def template_archs():
         return validate_and_update_archs()
 
 
-@lru_cache(maxsize=1)
-def get_arch_key():
-    """Filename-safe identity of template_archs(), for cache paths."""
-    return "+".join(template_archs())
-
-
-def get_template_build_dir(folder):
-    # Template libraries contain device code, so a specialization built for one
-    # arch must never satisfy not_built() for another.
-    return f"{BUILD_DIR}/template_libs/{get_arch_key()}/{folder}"
-
-
 def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
-    sub_build_dir = get_template_build_dir(folder)
+    sub_build_dir = os.path.join(BUILD_DIR, folder)
     include_dir = f"{sub_build_dir}/include"
     if not os.path.exists(include_dir):
         os.makedirs(include_dir, exist_ok=True)
@@ -378,7 +366,7 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
 def run_lib(func_name, folder=None):
     if folder is None:
         folder = func_name
-    lib_path = os.path.join(get_template_build_dir(folder), LIB_BASENAME)
+    lib_path = os.path.join(BUILD_DIR, folder, LIB_BASENAME)
     # os.RTLD_LAZY does not exist on Windows.
     mode = os.RTLD_LAZY if not IS_WINDOWS else 0
     lib = ctypes.CDLL(lib_path, mode)
@@ -396,9 +384,7 @@ def get_default_func_name(md_name, args: tuple):
 
 
 def not_built(folder):
-    return not os.path.exists(
-        os.path.join(get_template_build_dir(folder), LIB_BASENAME)
-    )
+    return not os.path.exists(os.path.join(BUILD_DIR, folder, LIB_BASENAME))
 
 
 def compile_template_op(
