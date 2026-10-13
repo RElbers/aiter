@@ -40,7 +40,7 @@ def _table(path: Path, headers: list[str], rows: list[list[str]]) -> None:
 
 def _get_index_url(release_type: str, gpu_archs: str = "gfx942-gfx950") -> str | None:
     domain = DOMAIN_MAP.get(release_type)
-    if not domain:
+    if not domain or not gpu_archs:
         return None
     return f"https://{domain}/whl/{gpu_archs}/"
 
@@ -50,7 +50,7 @@ def _index_arch_key(gpu_archs: str, build_targets: str) -> str:
 
     Build targets override gpu_archs, so their arch names win when set.
     """
-    entries = re.split(r"[;,]", build_targets or gpu_archs)
+    entries = re.split(r"[;,]", build_targets.strip() or gpu_archs)
     archs = {e.split(":")[0].strip().lower() for e in entries if e.strip()}
     return "-".join(sorted(archs))
 
