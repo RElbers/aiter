@@ -17,6 +17,7 @@ AITER_CORE_DIR = (
     else os.path.abspath(f"{this_dir}/../../aiter/jit/utils")
 )
 sys.path.insert(0, AITER_CORE_DIR)
+from build_targets import resolve_build_targets
 from chip_info import (
     build_tune_dict,
     write_lookup_header,
@@ -35,7 +36,7 @@ a8w8_blockscale_gemm instance gen for ck
 
 
 class gemm_a8w8_blockscale_codegen:
-    def __init__(self, working_path: str, istune=False, tune_file=None):
+    def __init__(self, working_path: str, istune=False, tune_file=None, targets=None):
         self.working_path = working_path
         if not os.path.exists(working_path):
             os.makedirs(working_path)
@@ -44,6 +45,7 @@ class gemm_a8w8_blockscale_codegen:
         self.instances_path = os.path.join(working_path, "instances")
         self.istune = istune
         self.tune_file = tune_file
+        self.targets = targets
 
     def get_tune_dict(self, tune_dict_csv: str):
         """
@@ -56,6 +58,8 @@ class gemm_a8w8_blockscale_codegen:
                 candidate_kernels_dict,
                 libtype="ck",
                 kernels_by_name=candidate_kernels_by_name,
+                targets=self.targets,
+                tune_source=tune_dict_csv,
             )
         return default_kernels_dict
 
@@ -441,6 +445,12 @@ if __name__ == "__main__":
         "--tune", action="store_true", required=False, help="generated tune instances"
     )
 
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
-    codegen = gemm_a8w8_blockscale_codegen(args.working_path, args.tune, args.tune_file)
+    targets = resolve_build_targets(args.build_targets)
+    codegen = gemm_a8w8_blockscale_codegen(
+        args.working_path, args.tune, args.tune_file, targets=targets
+    )
     codegen.run()

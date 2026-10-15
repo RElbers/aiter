@@ -334,7 +334,14 @@ def get_build_targets() -> list[tuple[str, int]]:
 
 
 def build_tune_dict(
-    tune_df, default_dict, kernels_list, libtype=None, kernels_by_name=None
+    tune_df,
+    default_dict,
+    kernels_list,
+    libtype=None,
+    kernels_by_name=None,
+    *,
+    targets=None,
+    tune_source=None,
 ):
     """Filter tune_df to rows matching the current build targets and return a
     (gfx, cu_num, M, N, K)-keyed dispatch dict, starting from a copy of default_dict.
@@ -355,6 +362,9 @@ def build_tune_dict(
                           When provided and the CSV has a "kernelName" column, kernel
                           lookup uses the name instead of kernelId. Falls back to
                           kernelId if the kernelName column is absent from the CSV.
+        targets:         Resolved build pairs supplied by an explicit build caller;
+                         None retains legacy target selection.
+        tune_source:     Optional table/backend label for missing-row diagnostics.
 
     Strict on stale tuned-CSV rows: any row whose kernelName (or kernelId, in the
     fallback path) is not present in the registry will raise RuntimeError listing
@@ -366,10 +376,20 @@ def build_tune_dict(
         (gfx, cu_num, M, N, K) 5-tuples (from the filtered CSV rows).
     """
     tune_dict = dict(default_dict)
-    targets = get_build_targets()
+    if targets is None:
+        targets = get_build_targets()
     filtered = filter_tune_df(tune_df, targets)
     if libtype is not None and "libtype" in tune_df.columns:
         filtered = filtered[filtered["libtype"] == libtype]
+    if tune_source is not None:
+        for gfx, cu_num in targets:
+            if not ((filtered["gfx"] == gfx) & (filtered["cu_num"] == cu_num)).any():
+                logger.warning(
+                    "No tuned rows for %s:%s in %s; retaining fallback kernels",
+                    gfx,
+                    cu_num,
+                    tune_source,
+                )
     use_name = kernels_by_name is not None and "kernelName" in tune_df.columns
     if kernels_by_name is not None and not use_name:
         logger.warning(
@@ -416,7 +436,9 @@ def build_tune_dict(
     return tune_dict
 
 
-def build_tune_dict_batched(tune_df, default_dict, kernels_list, libtype=None):
+def build_tune_dict_batched(
+    tune_df, default_dict, kernels_list, libtype=None, *, targets=None, tune_source=None
+):
     """Like build_tune_dict, but for batched GEMM modules whose dispatch key
     includes the batch dimension B.
 
@@ -435,10 +457,20 @@ def build_tune_dict_batched(tune_df, default_dict, kernels_list, libtype=None):
         (gfx, cu_num, B, M, N, K) 6-tuples (from the filtered CSV rows).
     """
     tune_dict = dict(default_dict)
-    targets = get_build_targets()
+    if targets is None:
+        targets = get_build_targets()
     filtered = filter_tune_df(tune_df, targets)
     if libtype is not None and "libtype" in tune_df.columns:
         filtered = filtered[filtered["libtype"] == libtype]
+    if tune_source is not None:
+        for gfx, cu_num in targets:
+            if not ((filtered["gfx"] == gfx) & (filtered["cu_num"] == cu_num)).any():
+                logger.warning(
+                    "No tuned rows for %s:%s in %s; retaining fallback kernels",
+                    gfx,
+                    cu_num,
+                    tune_source,
+                )
     bad_rows: list[str] = []
     for _, row in filtered.iterrows():
         key = (

@@ -17,6 +17,7 @@ else:
         f"{this_dir}/../../aiter/jit/utils"
     )  # develop mode
 sys.path.insert(0, AITER_CORE_DIR)
+from build_targets import resolve_build_targets
 from chip_info import get_gfx, get_gfx_list
 from moe_cktile2stages_common import (
     act_dict,
@@ -40,6 +41,7 @@ class cktile_moe_2stage_gemm_codegen:
         mul_routed_weight_stage,
         is_split_k,
         istune=False,
+        archs=None,
     ):
         self.working_path = working_path
         self.impl_path = os.path.join(working_path, "impl")
@@ -47,6 +49,7 @@ class cktile_moe_2stage_gemm_codegen:
         self.dispatchers_path = os.path.join(working_path, "dispatchers")
         self.manifests_path = os.path.join(working_path, "manifests")
         self.istune = istune
+        self.archs = get_gfx_list() if archs is None else archs
         self.kernel_name_list = []
         self.a_dtype = a_dtype
         self.b_dtype = "fp4"
@@ -239,7 +242,7 @@ template torch::Tensor
         def fill_template(name, a_type, b_type, acc_type, c_type):
             nonlocal self
             # Arch-aware scheduling: skip generating FP4 instances unless gfx950 is targeted
-            if "fp4" in b_type and ("gfx950" not in get_gfx_list()):
+            if "fp4" in b_type and ("gfx950" not in self.archs):
                 return
             body = INSTANCE_template.format(
                 name=name, dtypes=f"{a_type}, {b_type}, {acc_type}, {c_type}"
@@ -564,7 +567,11 @@ if __name__ == "__main__":
         help="select quant_type",
     )
 
+    parser.add_argument("--build-targets")
     args = parser.parse_args()
+    targets = resolve_build_targets(args.build_targets)
+    archs = sorted({gfx for gfx, _ in targets}) if targets else get_gfx_list()
+    arch = "gfx950" if targets else get_gfx()
 
     # # build all
     # if args.b_dtype is None:
@@ -614,8 +621,8 @@ if __name__ == "__main__":
     # b_type = "fp8"
     # quant_type = "per_token"
 
-    a_types = ["bf16"]
-    if get_gfx() == "gfx950":
+    a_types = ["bf16"] if targets is None or "gfx950" in archs else []
+    if "gfx950" in archs:
         a_types.append("fp8")
     b_type = "fp4"
     quant_type = "1x32"
@@ -667,6 +674,7 @@ if __name__ == "__main__":
             2,
             is_split_k,
             False,
+            archs=archs,
         )
 
         has_bias_values = [True, False] if act_type == "swiglu" else [False]
@@ -680,6 +688,7 @@ if __name__ == "__main__":
                 False,
                 has_bias,
                 is_split_k,
+                arch=arch,
             )
             tag, gemm2_kernel_list = get_gemm2_kernels_list(
                 a_type,
@@ -688,6 +697,7 @@ if __name__ == "__main__":
                 "no",
                 True,
                 has_bias,
+                arch=arch,
             )
             # merge gemm1/gemm2 dict with key = {stage, key}
             kernel_dict_merge = {

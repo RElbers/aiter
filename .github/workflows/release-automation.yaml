@@ -26,6 +26,11 @@ on:
         description: 'Create a missing scheduled release branch/tag from release_ref. Post-release tags must already exist.'
         type: boolean
         default: true
+      gpu_archs:
+        description: 'GPU architectures or gfx:CU pairs (default: gfx942;gfx950)'
+        required: false
+        type: string
+        default: 'gfx942;gfx950'
       force_rebuild:
         description: 'Build and upload even if the GitHub Release already has the expected wheel assets.'
         type: boolean
@@ -34,6 +39,9 @@ on:
 permissions:
   contents: read
   actions: read
+
+env:
+  GPU_BUILD_INPUT: ${{ github.event.inputs.gpu_archs || 'gfx942;gfx950' }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.inputs.release_tag || github.ref_name || 'scheduled' }}
@@ -254,7 +262,7 @@ jobs:
       docker_image_py312: pytorch/manylinux2_28-builder:rocm${{ matrix.rocm_version }}
       build_py310: true
       build_py312: true
-      gpu_archs: 'gfx942;gfx950'
+      gpu_archs: ${{ github.event.inputs.gpu_archs || 'gfx942;gfx950' }}
       runner: build-only-aiter
       add_date_stamp: false
       use_manylinux: true
@@ -342,7 +350,7 @@ jobs:
             echo
             echo "## Wheels"
             echo
-            echo "Prebuilt manylinux_2_28 wheels, \`GPU_ARCHS=gfx942;gfx950\`:"
+            echo "Prebuilt manylinux_2_28 wheels, \`build destinations: ${GPU_BUILD_INPUT}\`:"
             echo "- ROCm 7.0 / 7.1 / 7.2 x cp310 / cp312 (${EXPECTED_WHEEL_COUNT} wheels)"
             echo
             echo "Wheel assets are uploaded after the release page is created."
@@ -447,7 +455,7 @@ jobs:
               "",
               "## Wheels",
               "",
-              "Prebuilt manylinux_2_28 wheels, `GPU_ARCHS=gfx942;gfx950`:",
+              f"Prebuilt manylinux_2_28 wheels, build destinations: `{os.environ['GPU_BUILD_INPUT']}`:",
               "",
               "| ROCm | Python | Wheel |",
               "|---|---|---|",

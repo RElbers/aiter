@@ -51,6 +51,71 @@ GFX_CU_NUM_MAP = {
     "gfx1250": 256,  # Gfx1250
 }
 
+BuildTargets = tuple[tuple[str, int], ...]
+
+
+def parse_build_targets(value: str | BuildTargets) -> BuildTargets:
+    """Validate and canonicalize explicit destination pairs without probing a GPU."""
+    if isinstance(value, str):
+        pairs = []
+        for entry in value.split(";"):
+            match = re.fullmatch(r"\s*(gfx[0-9a-z]+)\s*:\s*([0-9]+)\s*", entry.lower())
+            if match is None:
+                raise ValueError(
+                    f"Invalid build target {entry!r}; expected gfx:positive_cu_count "
+                    "pairs separated by ';', e.g. gfx950:128;gfx950:256"
+                )
+            pairs.append((match[1], int(match[2])))
+    else:
+        pairs = list(value)
+
+    if not pairs:
+        raise ValueError("An explicit build request must contain at least one target")
+
+    targets = set()
+    for gfx, cu_num in pairs:
+        if gfx not in GFX_CU_NUM_MAP:
+            raise ValueError(
+                f"Unsupported build architecture {gfx!r}; supported: {list(GFX_CU_NUM_MAP)}"
+            )
+        if type(cu_num) is not int or cu_num <= 0:
+            raise ValueError(
+                f"Invalid CU count {cu_num!r} for {gfx}; expected a positive integer"
+            )
+        targets.add((gfx, cu_num))
+
+    return tuple(sorted(targets))
+
+
+def resolve_build_targets(
+    value: str | BuildTargets | None = None,
+) -> BuildTargets | None:
+    """Read build-only input at an explicit build entry point, never at runtime."""
+    if value is None:
+        value = os.getenv("AITER_BUILD_TARGETS", "")
+    if isinstance(value, str) and not value.strip():
+        return None
+
+    targets = parse_build_targets(value)
+    legacy_archs = os.getenv("GPU_ARCHS", "").strip()
+    if legacy_archs and set(_parse_gpu_archs_env(legacy_archs)) != {
+        gfx for gfx, _ in targets
+    }:
+        raise ValueError(
+            f"GPU_ARCHS={legacy_archs!r} conflicts with explicit build targets {targets}"
+        )
+    legacy_cu = os.getenv("CU_NUM", "").strip()
+    if legacy_cu and {int(legacy_cu)} != {cu for _, cu in targets}:
+        raise ValueError(
+            f"CU_NUM={legacy_cu!r} conflicts with explicit build targets {targets}"
+        )
+
+    return targets
+
+
+def format_build_targets(targets: BuildTargets) -> str:
+    return ";".join(f"{gfx}:{cu_num}" for gfx, cu_num in targets)
+
 
 def torch_processor_count_to_cu(gfx: str, processor_count: int) -> int:
     """Return physical CUs from HIP's mode-dependent processor count."""

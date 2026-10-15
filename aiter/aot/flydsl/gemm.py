@@ -158,6 +158,9 @@ _SHORT_DTYPE = {
 }
 
 
+from .common import OpKind, resolve_aot_targets, select_aot_jobs
+
+
 def _parse_bool(value: str | None) -> bool:
     if value is None:
         return False
@@ -1181,7 +1184,11 @@ def main():
         default=DEFAULT_CSVS,
         help="Path(s) to tuned CSV config file(s); defaults come from AITER_CONFIGS",
     )
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_aot_targets(args.build_targets)
 
     csv_paths = [os.path.abspath(p) for p in args.csv]
     for csv_path in csv_paths:
@@ -1195,14 +1202,7 @@ def main():
     arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
 
     all_jobs = collect_aot_jobs(csv_paths, parse_csv)
-    if arch:
-        # GPU_ARCHS may be a ';'- or ','-separated list (e.g. "gfx942;gfx950").
-        arch_set = {a.strip() for a in re.split(r"[;,]", arch) if a.strip()}
-        n_before = len(all_jobs)
-        all_jobs = [
-            j for j in all_jobs if job_arch(j["cu_num"], j.get("gfx", "")) in arch_set
-        ]
-        print(f"[aiter] ARCH={arch}: {len(all_jobs)}/{n_before} jobs match")
+    all_jobs = select_aot_jobs(OpKind.GEMM, all_jobs, targets)
 
     print("=" * 72)
     print("FlyDSL GEMM AOT Pre-compilation")

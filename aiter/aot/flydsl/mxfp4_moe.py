@@ -43,6 +43,9 @@ if os.path.exists(_ACTIVE_FMOE_CSV) and _ACTIVE_FMOE_CSV not in DEFAULT_CSVS:
 _MXFP4_INTERMEDIATE = os.environ.get("AITER_MXFP4_INTERMEDIATE", "0") not in ("0", "")
 
 
+from .common import OpKind, resolve_aot_targets, select_aot_jobs
+
+
 def _job_key(job: dict) -> tuple:
     """Dedup key == the runtime FlyDSL cache key."""
     if job.get("v2_stage2"):
@@ -535,7 +538,11 @@ def main():
         help="Path(s) to tuned FMoE CSVs; default: fp4, fp8fp4, a4w4, and a8w4 "
         "model configs plus the active merged FMoE config",
     )
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_aot_targets(args.build_targets)
 
     csv_paths = [os.path.abspath(p) for p in args.csv]
     for csv_path in csv_paths:
@@ -547,6 +554,7 @@ def main():
         sys.exit(1)
 
     all_jobs = collect_aot_jobs(csv_paths, parse_csv)
+    all_jobs = select_aot_jobs(OpKind.MXFP4_MOE, all_jobs, targets)
     stage1_jobs = [j for j in all_jobs if j["stage"] == 1]
     stage2_jobs = [j for j in all_jobs if j["stage"] == 2]
 

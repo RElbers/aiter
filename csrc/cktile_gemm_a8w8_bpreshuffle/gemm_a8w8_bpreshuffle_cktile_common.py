@@ -487,17 +487,18 @@ def append_expanded(base_expanded, extra):
     return out
 
 
-arch = get_gfx()
 _expanded_942 = expand_blockpercu(kernels_list_942)
 _expanded_950 = append_expanded(
     expand_blockpercu(kernels_list_950), kernels_list_950_rowcol_wp_v2
 )
-if arch == "gfx942":
-    kernels_list = _expanded_942
-    default_kernels_dict = default_kernels_dict_942
-else:
-    kernels_list = _expanded_950
-    default_kernels_dict = default_kernels_dict_950
+
+
+def get_kernel_registry(arch=None):
+    arch = get_gfx() if arch is None else arch
+    if arch == "gfx942":
+        return _expanded_942, default_kernels_dict_942
+    return _expanded_950, default_kernels_dict_950
+
 
 # Name-based reverse lookup for get_tune_dict() — built once at import time
 # Must include kernels from ALL arches, not just the current get_gfx() arch.
@@ -508,3 +509,13 @@ else:
 kernels_by_name = {
     v.name: v for v in list(_expanded_942.values()) + list(_expanded_950.values())
 }
+
+
+def __getattr__(name):
+    # Legacy tuning clients import these names; defer hardware resolution until
+    # requested so explicit code generators can import the neutral registry.
+    if name == "kernels_list":
+        return get_kernel_registry()[0]
+    if name == "default_kernels_dict":
+        return get_kernel_registry()[1]
+    raise AttributeError(name)

@@ -322,6 +322,10 @@ def stage_blob_sources(
         _seed_staging_files(staging_dir, seed_files)
 
         output_dir = os.path.join(staging_dir, "")
+        # Explicit builds pass their request as codegen arguments. A runtime JIT
+        # child must not activate a build-only request left in the caller's shell.
+        codegen_env = os.environ.copy()
+        codegen_env.pop("AITER_BUILD_TARGETS", None)
         for command in commands:
             if IS_WINDOWS:
                 blob_dir_placeholder = f"AITER_BLOB_DIR_{uuid.uuid4().hex}"
@@ -343,7 +347,7 @@ def stage_blob_sources(
                     subprocess.list2cmdline(args) if IS_WINDOWS else shlex.join(args)
                 )
                 logger.info("exec_blob ---> %s", command_line)
-            subprocess.run(args, check=True)
+            subprocess.run(args, check=True, env=codegen_env)
 
         generated_build_inputs = [
             os.path.join(root, filename)

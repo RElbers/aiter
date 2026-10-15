@@ -29,6 +29,9 @@ _WARP_TILE_N = 64
 _TILE_K = 256
 
 
+from .common import OpKind, resolve_aot_targets, select_aot_jobs
+
+
 def _align_up(value: int, alignment: int) -> int:
     return ((int(value) + int(alignment) - 1) // int(alignment)) * int(alignment)
 
@@ -443,8 +446,13 @@ def compile_one_config(**job):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", nargs="+", default=DEFAULT_CSVS)
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args(argv)
+    targets = resolve_aot_targets(args.build_targets)
     jobs = collect_aot_jobs(args.csv, parse_csv)
+    jobs = select_aot_jobs(OpKind.GROUPED_MOE, jobs, targets)
 
     total_t0 = time.time()
     print(f"--- Compiling {len(jobs)} grouped-MoE kernels ---")

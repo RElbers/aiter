@@ -139,10 +139,19 @@ def _get_tuned_fmoe_rows() -> list[dict]:
     return rows
 
 
-def get_moe_ck2stages_prebuild_variants(aiter_csrc_dir: str) -> list[dict]:
+def get_moe_ck2stages_prebuild_variants(
+    aiter_csrc_dir: str, *, build_targets=None
+) -> list[dict]:
     seen: set[tuple] = set()
     results: list[dict] = []
     for row in _get_tuned_fmoe_rows():
+        if build_targets is not None:
+            gfx = (row.get("gfx") or "").strip()
+            cu = int(row.get("cu_num") or 0)
+            if gfx and not any(
+                gfx == arch and (not cu or cu == count) for arch, count in build_targets
+            ):
+                continue
         kn1 = (row.get("kernelName1") or "").strip()
         kn2 = (row.get("kernelName2") or "").strip()
         if kn1.startswith("flydsl_") or kn2.startswith("flydsl_"):
