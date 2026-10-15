@@ -102,40 +102,14 @@ def cli_requested_archs() -> set[str] | None:
     return requested_archs(arch_env or None)
 
 
-def job_arch(kind: OpKind, job: dict[str, Any]) -> str:
-    """The arch a job compiles for, as its kind's compile_one_config picks it."""
-    if kind is OpKind.GEMM:
-        from .gemm import job_arch as gemm_job_arch
-
-        return gemm_job_arch(job.get("cu_num", 0), job.get("gfx", ""))
-    if kind is OpKind.CONV:
-        from .conv import job_arch as conv_job_arch
-
-        return conv_job_arch(job.get("cu_num", 0), job.get("gfx", ""))
-    if kind is OpKind.MOE:
-        from .moe import job_arch as moe_job_arch
-
-        return moe_job_arch(job.get("cu_num", 0), job.get("gfx", ""))
-    if kind is OpKind.CHUNK_GDN_H:
-        from .chunk_gdn_h import job_arch as chunk_gdn_h_job_arch
-
-        return chunk_gdn_h_job_arch(job.get("cu_num", 0), job.get("gfx", ""))
+def job_arch(kind: OpKind, cu_num: int = 0, gfx: str = "") -> str:
+    if kind in (OpKind.MXFP4_MOE, OpKind.MEGA_MOE, OpKind.FMHA_FP8):
+        return "gfx950"
     if kind is OpKind.GROUPED_MOE:
-        from .grouped_moe import GROUPED_MOE_AOT_ARCH_DEFAULT
+        return gfx or "gfx1250"
+    if kind in (OpKind.GEMM, OpKind.CONV, OpKind.MOE, OpKind.CHUNK_GDN_H):
+        return gfx or cu_num_to_arch(cu_num)
 
-        return job.get("gfx") or GROUPED_MOE_AOT_ARCH_DEFAULT
-    if kind is OpKind.MXFP4_MOE:
-        from .mxfp4_moe import MXFP4_MOE_AOT_ARCH
-
-        return MXFP4_MOE_AOT_ARCH
-    if kind is OpKind.MEGA_MOE:
-        from .mega_moe import MEGA_MOE_AOT_ARCH
-
-        return MEGA_MOE_AOT_ARCH
-    if kind is OpKind.FMHA_FP8:
-        from .fmha_fp8 import AOT_ARCH
-
-        return AOT_ARCH
     raise ValueError(f"unknown FlyDSL AOT kind: {kind!r}")
 
 
@@ -145,7 +119,14 @@ def select_target_jobs(
     """The jobs whose arch is in archs; all of them when archs is None."""
     if archs is None:
         return jobs
-    return [job for job in jobs if job_arch(kind, job) in archs]
+
+    selected = []
+    for job in jobs:
+        arch = job_arch(kind, job.get("cu_num", 0), job.get("gfx", ""))
+        if arch in archs:
+            selected.append(job)
+
+    return selected
 
 
 def job_identity(job: dict[str, Any]) -> tuple:
@@ -219,7 +200,7 @@ def override_env(var_name: str, value: str | None) -> Iterator[None]:
             os.environ[var_name] = prev
 
 
-def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
+def _collect_aot_jobs_for(kind: OpKind, archs: set[str] | None) -> list[dict[str, Any]]:
     """Load DEFAULT_CSVS + parse_csv for the named kind and return its
     job list. Note: importing .gemm / .moe / .chunk_gdn_h here also
     runs their module-level imports, which pull in FlyDSL (e.g.
@@ -228,11 +209,13 @@ def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
     if kind is OpKind.MEGA_MOE:
         from .mega_moe import default_jobs
 
-        return select_target_jobs(kind, default_jobs(), requested_archs())
+        jobs = default_jobs()
+        return select_target_jobs(kind, jobs, archs)
     if kind is OpKind.FMHA_FP8:
         from .fmha_fp8 import default_jobs
 
-        return select_target_jobs(kind, default_jobs(), requested_archs())
+        jobs = default_jobs()
+        return select_target_jobs(kind, jobs, archs)
     if kind is OpKind.MOE:
         from .moe import DEFAULT_CSVS, parse_csv
     elif kind is OpKind.MXFP4_MOE:
@@ -247,9 +230,9 @@ def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
         from .chunk_gdn_h import DEFAULT_CSVS, parse_csv
     else:
         raise ValueError(f"unknown FlyDSL AOT kind: {kind!r}")
-    return select_target_jobs(
-        kind, collect_aot_jobs(DEFAULT_CSVS, parse_csv), requested_archs()
-    )
+
+    jobs = collect_aot_jobs(DEFAULT_CSVS, parse_csv)
+    return select_target_jobs(kind, jobs, archs)
 
 
 def _compile_one_config_for(kind: OpKind) -> Callable[..., dict[str, Any]]:
@@ -519,9 +502,10 @@ def run_aot(cache_dir: str) -> None:
     os.makedirs(cache_dir, exist_ok=True)
     os.environ["FLYDSL_RUNTIME_CACHE_DIR"] = cache_dir
 
+    archs = requested_archs()
     all_jobs: list[tuple[OpKind, dict[str, Any]]] = []
     for kind in OpKind:
-        for job in _collect_aot_jobs_for(kind):
+        for job in _collect_aot_jobs_for(kind, archs):
             all_jobs.append((kind, job))
 
     if not all_jobs:
@@ -537,7 +521,6 @@ def run_aot(cache_dir: str) -> None:
     shutil.rmtree(result_dir, ignore_errors=True)
     os.makedirs(result_dir, exist_ok=True)
 
-    archs = requested_archs()
     print(
         f"[aiter] FlyDSL AOT: {len(all_jobs)} kernels "
         f"for {'+'.join(sorted(archs)) if archs else 'every arch'}, "

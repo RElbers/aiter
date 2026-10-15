@@ -24,13 +24,13 @@ from aiter.aot.flydsl.common import (
     cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
+    job_arch,
     override_env,
     select_target_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS, AITER_ROOT_DIR
 
 _MODEL_CONFIG_DIR = f"{AITER_ROOT_DIR}/aiter/configs/model_configs"
-MXFP4_MOE_AOT_ARCH = "gfx950"
 # moe.py defers every ``flydsl_moe2_layout_`` name to this module, so a CSV the
 # glob misses gets no AOT job at all and JITs on the first inference call.
 DEFAULT_CSVS = sorted(
@@ -451,6 +451,7 @@ def _compile_v2_stage2(job):
 
 
 def compile_one_config(**job):
+    aot_arch = job_arch(OpKind.MXFP4_MOE)
     stage = job["stage"]
     shape_str = (
         f"{job['kernel_name']} NE={job['NE']} D_INTER={job['D_INTER']} BM={job['BM']}"
@@ -464,7 +465,7 @@ def compile_one_config(**job):
         # mxfp4 a4w4 kernels are gfx950-only. In the GPU-free AOT build,
         # get_rocm_arch() detects gfx942 and the gfx950 intrinsics fail to
         # select (LLVM aborts), so pin FLYDSL_GPU_ARCH=gfx950.
-        with compile_only_env(), override_env("FLYDSL_GPU_ARCH", MXFP4_MOE_AOT_ARCH):
+        with compile_only_env(), override_env("FLYDSL_GPU_ARCH", aot_arch):
             if stage == 1:
                 _compile_stage1(job)
             elif job.get("v2_stage2"):

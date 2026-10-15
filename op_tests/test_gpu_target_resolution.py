@@ -8,7 +8,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, mock
 
 # Ensure the repo-local aiter is imported, not any system/site-packages install.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -65,6 +65,146 @@ def test_gpu_archs_takes_the_live_cu_count():
         targets = chip_info.get_build_targets()
 
     assert targets == [("gfx950", 128)], targets
+
+
+def test_build_target_environment_contract():
+    from aiter.jit.utils.build_targets import get_build_targets_env
+
+    cases = (
+        ({}, "Neither AITER_BUILD_TARGETS nor GPU_ARCHS is set"),
+        ({"GPU_ARCHS": "native"}, "needs a live GPU"),
+        ({"GPU_ARCHS": " ; "}, "contains no valid architecture names"),
+        ({"GPU_ARCHS": "native,gfx950"}, "cannot be combined"),
+        ({"GPU_ARCHS": "gfx_unknown"}, "unknown gfx"),
+        ({"GPU_ARCHS": "gfx950", "CU_NUM": "0"}, "must be a positive integer"),
+        # The env-only entry point diagnoses CU_NUM before parsing GPU_ARCHS.
+        ({"GPU_ARCHS": " ; ", "CU_NUM": "bad"}, "CU_NUM="),
+        ({"GPU_ARCHS": "gfx1100", "CU_NUM": "64"}, "no default CU count"),
+        ({"AITER_BUILD_TARGETS": " ; "}, "names no targets"),
+        ({"AITER_BUILD_TARGETS": "native"}, "unknown gfx"),
+        ({"AITER_BUILD_TARGETS": "gfx950:-1"}, "must be a positive integer"),
+        ({"AITER_BUILD_TARGETS": "gfx950:1:2"}, "must be a positive integer"),
+        ({"AITER_BUILD_TARGETS": "gfx1100"}, "no default CU count"),
+        ({"AITER_BUILD_TARGETS": "gfx1100:64"}, [("gfx1100", 64)]),
+        ({"AITER_BUILD_TARGETS": " \t", "GPU_ARCHS": "gfx950"}, [("gfx950", 256)]),
+        (
+            {"GPU_ARCHS": " GFX950, gfx942;gfx950 ", "CU_NUM": "80"},
+            [("gfx950", 80), ("gfx942", 80)],
+        ),
+        (
+            {"AITER_BUILD_TARGETS": " GFX950:128,gfx942;gfx950:128;gfx950 "},
+            [("gfx950", 128), ("gfx942", 304), ("gfx950", 256)],
+        ),
+        (
+            {"AITER_BUILD_TARGETS": "gfx950", "GPU_ARCHS": " ; ", "CU_NUM": "bad"},
+            [("gfx950", 256)],
+        ),
+    )
+    for env, expected in cases:
+        with _target_env(**env):
+            if isinstance(expected, str):
+                with TestCase().assertRaisesRegex(RuntimeError, expected, msg=env):
+                    get_build_targets_env()
+            else:
+                assert get_build_targets_env() == expected, env
+
+
+def test_build_target_live_fallback_contract():
+    from aiter.jit.utils import chip_info
+
+    # A named bare arch stays pinned; only GPU_ARCHS adopts the live CU count.
+    cases = (
+        ({"AITER_BUILD_TARGETS": "gfx950"}, "gfx950", [("gfx950", 256)]),
+        ({"GPU_ARCHS": "gfx950;gfx942"}, "gfx950", [("gfx950", 128), ("gfx942", 304)]),
+        ({"GPU_ARCHS": "gfx950", "CU_NUM": "80"}, "gfx950", [("gfx950", 80)]),
+        ({"GPU_ARCHS": "gfx950"}, "gfx942", [("gfx950", 256)]),
+        ({"GPU_ARCHS": "gfx950"}, RuntimeError("no GPU"), [("gfx950", 256)]),
+        ({"GPU_ARCHS": "gfx950"}, KeyError("unknown GPU"), [("gfx950", 256)]),
+        ({}, "gfx950", [("gfx950", 128)]),
+        ({"GPU_ARCHS": " NATIVE "}, "gfx950", [("gfx950", 128)]),
+        ({}, RuntimeError("no GPU"), "No GPU detected"),
+        # This entry point parses GPU_ARCHS before inspecting CU_NUM.
+        ({"GPU_ARCHS": " ; ", "CU_NUM": "bad"}, "gfx950", "contains no valid"),
+    )
+    for env, live, expected in cases:
+        probe = (
+            mock.Mock(side_effect=live)
+            if isinstance(live, Exception)
+            else mock.Mock(return_value=live)
+        )
+        with (
+            _target_env(**env),
+            mock.patch.object(chip_info, "get_gfx_runtime", probe),
+            mock.patch.object(chip_info, "get_gfx", probe),
+            mock.patch.object(chip_info, "get_cu_num", return_value=128),
+        ):
+            if isinstance(expected, str):
+                with TestCase().assertRaisesRegex(RuntimeError, expected, msg=env):
+                    chip_info.get_build_targets()
+            else:
+                assert chip_info.get_build_targets() == expected, (env, live)
+
+
+def test_target_resolution_warnings():
+    import pandas as pd
+
+    from aiter.jit import core
+    from aiter.jit.utils import chip_info
+
+    for gpu_archs, warning in (
+        ("gfx942", "disagrees"),
+        (" ; ", "Ignoring GPU_ARCHS"),
+        ("gfx950", None),
+    ):
+        with (
+            _target_env(AITER_BUILD_TARGETS="gfx950", GPU_ARCHS=gpu_archs),
+            mock.patch.object(core.logger, "warning") as log,
+        ):
+            assert core.validate_and_update_archs() == ["gfx950"]
+            assert log.call_count == int(warning is not None)
+            if warning:
+                assert warning in log.call_args.args[0]
+
+    with (
+        _target_env(AITER_BUILD_TARGETS="gfx950", CU_NUM="128"),
+        mock.patch.object(chip_info.logger, "warning") as log,
+    ):
+        assert chip_info.get_build_targets() == [("gfx950", 256)]
+        assert "does not match any build target" in log.call_args.args[0]
+
+    df = pd.DataFrame({"gfx": ["gfx950"], "cu_num": [256], "libtype": ["ck"]})
+    with (
+        _target_env(AITER_BUILD_TARGETS="gfx950"),
+        mock.patch.object(chip_info.logger, "warning") as log,
+    ):
+        assert chip_info._select_tuned_rows(df, "cktile").empty
+        assert log.call_args.args[1] == "gfx950:256"
+
+
+def test_native_resolution_depends_on_the_caller():
+    from aiter.jit import core
+    from aiter.jit.utils import chip_info
+
+    for windows, expected in ((False, ["native"]), (True, ["gfx950"])):
+        with (
+            _target_env(),
+            mock.patch.object(core, "IS_WINDOWS", windows),
+            mock.patch.object(core, "_detect_native", return_value=["gfx950"]),
+        ):
+            assert core.validate_and_update_archs() == expected
+
+    with (
+        _target_env(),
+        _cleared_cache(chip_info.get_gfx_list),
+        _cleared_cache(chip_info.get_gfx_custom_op_core),
+        mock.patch.object(
+            chip_info, "_detect_native", side_effect=RuntimeError("no GPU")
+        ),
+    ):
+        assert chip_info.get_gfx_list() == ["cpu"]
+        assert os.environ["AITER_GPU_ARCHS"] == "cpu"
+        with TestCase().assertRaisesRegex(RuntimeError, "no GPU"):
+            chip_info.get_gfx_custom_op_core()
 
 
 def test_unparseable_gpu_archs_defers_to_build_targets():
@@ -176,9 +316,36 @@ def test_flydsl_aot_runs_every_kind_through_target_selection():
             raise CompileReached
         return contextlib.nullcontext()
 
+    # Expected architectures are independent of the filtering/compile helpers.
+    probes = (
+        {},
+        {"cu_num": 80},
+        {"cu_num": 304},
+        {"cu_num": 128},
+        {"gfx": "gfx1250", "cu_num": 256},
+    )
     for kind in common.OpKind:
-        with mock.patch.object(common, "requested_archs", return_value=None):
-            jobs = common._collect_aot_jobs_for(kind)
+        if kind in (
+            common.OpKind.MXFP4_MOE,
+            common.OpKind.MEGA_MOE,
+            common.OpKind.FMHA_FP8,
+        ):
+            expected = ["gfx950"] * len(probes)
+        elif kind is common.OpKind.GROUPED_MOE:
+            expected = ["gfx1250"] * len(probes)
+        else:
+            expected = ["gfx950", "gfx942", "gfx942", "gfx950", "gfx1250"]
+        assert [common.job_arch(kind, **p) for p in probes] == expected, kind
+        jobs = [*probes, probes[1]]
+        expected_jobs = [
+            j for j, a in zip(jobs, [*expected, expected[1]]) if a == "gfx942"
+        ]
+        before = [dict(j) for j in jobs]
+        assert common.select_target_jobs(kind, jobs, {"gfx942"}) == expected_jobs, kind
+        assert jobs == before, kind
+
+    for kind in common.OpKind:
+        jobs = common._collect_aot_jobs_for(kind, None)
         assert jobs, kind
 
         # job_arch must name the arch compile_one_config actually builds for:
@@ -191,10 +358,12 @@ def test_flydsl_aot_runs_every_kind_through_target_selection():
         # 256 CUs alone would map to gfx950.
         if "gfx" in jobs[0]:
             probe = {**jobs[0], "gfx": "gfx1250", "cu_num": 256}
-            assert common.job_arch(kind, probe) == "gfx1250", kind
+            assert (
+                common.job_arch(kind, probe["cu_num"], probe["gfx"]) == "gfx1250"
+            ), kind
             samples["probe"] = probe
         for job in samples.values():
-            arch = common.job_arch(kind, job)
+            arch = common.job_arch(kind, job.get("cu_num", 0), job.get("gfx", ""))
             assert arch in KNOWN_GFX - {"gfx908"}, (kind, arch)
             compile_archs = []
             with mock.patch.object(module, "override_env", stop_at_compile_arch):
@@ -205,8 +374,7 @@ def test_flydsl_aot_runs_every_kind_through_target_selection():
             assert compile_archs == [arch], (kind, arch, compile_archs)
 
         # No kind compiles for gfx908, so every job of every kind must drop.
-        with mock.patch.object(common, "requested_archs", return_value={"gfx908"}):
-            assert common._collect_aot_jobs_for(kind) == [], kind
+        assert common._collect_aot_jobs_for(kind, {"gfx908"}) == [], kind
 
 
 def test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch():
@@ -273,6 +441,15 @@ def test_template_libraries_compile_for_the_live_gpu():
         ):
             assert cpp_utils.template_archs() == archs, archs
 
+    with (
+        mock.patch.object(
+            cpp_utils, "get_gfx_runtime", side_effect=KeyError("unknown GPU")
+        ),
+        _cleared_cache(cpp_utils.template_archs),
+        TestCase().assertRaisesRegex(KeyError, "unknown GPU"),
+    ):
+        cpp_utils.template_archs()
+
 
 def test_hsaco_lookup_uses_live_arch():
     import csrc.cpp_itfs.utils as cpp_utils
@@ -310,6 +487,10 @@ def _cleared_cache(function):
 
 
 if __name__ == "__main__":
+    test_build_target_environment_contract()
+    test_build_target_live_fallback_contract()
+    test_target_resolution_warnings()
+    test_native_resolution_depends_on_the_caller()
     test_runtime_arch_resolution()
     test_opus_flags_follow_target_membership()
     test_gpu_archs_takes_the_live_cu_count()

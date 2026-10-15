@@ -31,7 +31,7 @@ from aiter.aot.flydsl.common import (
     cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
-    cu_num_to_arch,
+    job_arch,
     job_identity,
     override_env,
     run_jobs_parallel,
@@ -80,7 +80,6 @@ assert LDG_VEC % TR_VEC == 0, (
 )
 
 DEFAULT_CSVS = [AITER_CONFIGS.AITER_CONFIG_CONV3D_BF16_FILE]
-CONV_AOT_ARCH_DEFAULT = "gfx950"
 
 # Innermost probe extent; must be >1 so the unit stride stays on the last axis.
 _PROBE_EXTENT = 8
@@ -303,11 +302,6 @@ def _resolve_dyn_hw(*, shape, splitk, tile, out_ndhwc, has_bias):
     )
 
 
-def job_arch(cu_num: int = 0, gfx: str = "") -> str:
-    """Target arch a job would compile for -- shared by dispatch and filtering."""
-    return gfx or cu_num_to_arch(cu_num, default=CONV_AOT_ARCH_DEFAULT)
-
-
 def _probe(rank: int, dtype_is_fp32: bool = False):
     """CPU stand-in for one kernel argument. Innermost extent must be >1."""
     import torch
@@ -412,7 +406,7 @@ def compile_one_config(
     **kwargs,
 ) -> dict:
     """Compile one conv or transpose configuration into the cache."""
-    aot_arch = job_arch(cu_num, gfx)
+    aot_arch = job_arch(OpKind.CONV, cu_num, gfx)
     if kind == "transpose":
         shape_str = (
             f"{kernel_name}  N={kwargs['N']} C={kwargs['c_padded']} S={kwargs['s']}"

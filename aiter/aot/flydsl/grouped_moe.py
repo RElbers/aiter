@@ -18,6 +18,7 @@ from aiter.aot.flydsl.common import (
     cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
+    job_arch,
     job_identity,
     override_env,
     run_jobs_parallel,
@@ -148,9 +149,6 @@ def parse_csv(csv_path: str):
                 seen.add(key)
                 jobs.append(job)
     return jobs
-
-
-GROUPED_MOE_AOT_ARCH_DEFAULT = "gfx1250"
 
 
 def _compile_grouped_moe_aux_kernels(job, *, dtype, quant_mode, wmma_rep, contiguous):
@@ -390,7 +388,8 @@ def compile_one_config(**job):
     import torch
     from torch._subclasses.fake_tensor import FakeTensorMode
 
-    aot_arch = job.pop("gfx", "") or GROUPED_MOE_AOT_ARCH_DEFAULT
+    gfx = job.pop("gfx", "")
+    aot_arch = job_arch(OpKind.GROUPED_MOE, gfx=gfx)
     shape_str = (
         # Use .get() so a missing key can't raise here, outside the try below:
         # an escaping exception would crash the worker (exitcode != 0), which the

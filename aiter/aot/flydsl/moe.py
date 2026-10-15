@@ -37,7 +37,7 @@ from aiter.aot.flydsl.common import (
     cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
-    cu_num_to_arch,
+    job_arch,
     job_identity,
     override_env,
     run_jobs_parallel,
@@ -69,7 +69,6 @@ DEFAULT_CSVS = [
     AITER_CONFIGS.AITER_CONFIG_FMOE_FILE,
     AITER_CONFIGS.AITER_CONFIG_FHMOE_FILE,
 ]
-MOE_AOT_ARCH_DEFAULT = "gfx950"
 
 
 def parse_csv(csv_path: str):
@@ -1018,11 +1017,6 @@ def _precompile_epilogue_to_cache(act: str, inter_dim: int, topk: int):
         )
 
 
-def job_arch(cu_num: int = 0, gfx: str = "") -> str:
-    """Target arch a job would compile for -- shared by dispatch and target selection."""
-    return gfx or cu_num_to_arch(cu_num, default=MOE_AOT_ARCH_DEFAULT)
-
-
 def compile_one_config(
     kernel_name: str,
     model_dim: int,
@@ -1040,7 +1034,7 @@ def compile_one_config(
 
     Returns a dict with timing info.
     """
-    aot_arch = job_arch(cu_num, gfx)
+    aot_arch = job_arch(OpKind.MOE, cu_num, gfx)
     is_epilogue = kwargs.get("stage") == "epilogue"
     shape_str = (
         f"{kernel_name}  inter_dim={inter_dim} topk={topk}"

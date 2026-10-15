@@ -57,7 +57,7 @@ from aiter.aot.flydsl.common import (
     cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
-    cu_num_to_arch,
+    job_arch,
     job_identity,
     override_env,
     run_jobs_parallel,
@@ -135,7 +135,6 @@ DEFAULT_CSVS = [
     AITER_CONFIGS.AITER_CONFIG_BATCHED_GEMM_A8W8_BLOCKSCALE_MXSCALE_BPRESHUFFLE_FILE,
     AITER_CONFIGS.AITER_CONFIG_GEMM_A8W8_BLOCKSCALE_MXSCALE_BPRESHUFFLE_FILE,
 ]
-GEMM_AOT_ARCH_DEFAULT = "gfx950"
 
 _PRESHUFFLE_RE = re.compile(
     r"^flydsl_bpreshuflle_"
@@ -996,11 +995,6 @@ def _compile_ptpc_wmma_to_cache(
             )
 
 
-def job_arch(cu_num: int = 0, gfx: str = "") -> str:
-    """Target arch a job would compile for -- shared by dispatch and target selection."""
-    return gfx or cu_num_to_arch(cu_num, default=GEMM_AOT_ARCH_DEFAULT)
-
-
 def compile_one_config(
     kernel_name: str,
     kind: str,
@@ -1014,7 +1008,7 @@ def compile_one_config(
     """Compile one GEMM kernel configuration and save it to cache."""
     from torch._subclasses.fake_tensor import FakeTensorMode
 
-    aot_arch = job_arch(cu_num, gfx)
+    aot_arch = job_arch(OpKind.GEMM, cu_num, gfx)
     shape_str = f"{kernel_name}  M={m} N={n} K={k}"
     result = {
         "kernel_name": kernel_name,

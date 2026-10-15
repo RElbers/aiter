@@ -21,12 +21,7 @@ from packaging.version import Version, parse
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, f"{this_dir}/utils/")
-from build_targets import (
-    KNOWN_GFX,
-    _parse_gpu_archs_env,
-    get_build_archs_env,
-    gpu_archs_env_names,
-)
+from build_targets import KNOWN_GFX, get_requested_archs_env
 from chip_info import _detect_native, get_gfx, get_gfx_list, get_gfx_runtime
 from cpp_extension import _jit_compile, executable_path, get_hip_version
 from file_baton import FileBaton
@@ -696,25 +691,7 @@ if multiprocessing.current_process().name == "MainProcess":
 
 
 def validate_and_update_archs():
-    # AITER_BUILD_TARGETS is authoritative for the arch set; a conflicting
-    # GPU_ARCHS warns and loses.
-    named = get_build_archs_env()
-    if named is not None:
-        archs = list(named)
-        try:
-            explicit = set(gpu_archs_env_names())
-        except RuntimeError as e:
-            logger.warning(
-                f"Ignoring GPU_ARCHS, AITER_BUILD_TARGETS takes precedence: {e}"
-            )
-            explicit = set()
-        if explicit and explicit != set(archs):
-            logger.warning(
-                f"GPU_ARCHS={sorted(explicit)} disagrees with "
-                f"AITER_BUILD_TARGETS={archs}; compiling for {archs}."
-            )
-    else:
-        archs = _parse_gpu_archs_env(os.getenv("GPU_ARCHS", "native"))
+    archs = get_requested_archs_env(warn_conflicts=True)
 
     # clang's `--offload-arch=native` shells out to offload-arch, which cannot
     # detect the GPU on Windows, so resolve the arch ourselves instead.

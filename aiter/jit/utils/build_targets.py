@@ -4,6 +4,7 @@
 # Pure-Python arch constants and env-driven build target resolution.
 # No torch dependency — safe to import in build scripts, gen_instances, and tests
 # that run without a GPU or a full PyTorch install.
+import logging
 import os
 import re
 
@@ -45,6 +46,7 @@ GFX_CU_NUM_MAP = {
 
 # Valid arch names; those without a GFX_CU_NUM_MAP default must name their CU count.
 KNOWN_GFX = frozenset(v for v in GFX_MAP.values() if v != "native")
+logger = logging.getLogger("aiter")
 
 
 def _parse_gpu_archs_env(gfx_env: str, name: str = "GPU_ARCHS") -> list[str]:
@@ -166,6 +168,33 @@ def gpu_archs_env_names() -> list[str]:
     return [a for a in archs if a != "native"]
 
 
+def get_requested_archs_env(*, warn_conflicts: bool = False) -> list[str]:
+    """Prefer named targets to GPU_ARCHS, leaving native unresolved."""
+    archs = get_build_archs_env()
+    if archs is None:
+        return _parse_gpu_archs_env(os.getenv("GPU_ARCHS", "native"))
+    if not warn_conflicts:
+        return archs
+
+    try:
+        explicit = set(gpu_archs_env_names())
+    except RuntimeError as error:
+        logger.warning(
+            "Ignoring GPU_ARCHS, AITER_BUILD_TARGETS takes precedence: %s", error
+        )
+        return archs
+
+    if explicit and explicit != set(archs):
+        logger.warning(
+            "GPU_ARCHS=%s disagrees with AITER_BUILD_TARGETS=%s; compiling for %s.",
+            sorted(explicit),
+            archs,
+            archs,
+        )
+
+    return archs
+
+
 def get_build_targets_env() -> list[tuple[str, int]]:
     """Resolve build targets from env only. No live GPU detection.
 
@@ -187,19 +216,33 @@ def get_build_targets_env() -> list[tuple[str, int]]:
             "Neither AITER_BUILD_TARGETS nor GPU_ARCHS is set. "
             "Set GPU_ARCHS=gfx942 (or similar) to resolve build targets without a GPU."
         )
-    cu_env = os.getenv("CU_NUM")
-    cu_override = None
-    if cu_env:
-        cu_override = _cu_num_or_none(cu_env)
-        if cu_override is None:
-            raise RuntimeError(f"CU_NUM={cu_env!r} must be a positive integer.")
 
+    cu_override = _get_cu_override()
     archs = _parse_gpu_archs_env(gfx_env)
+    return _build_targets_from_archs(archs, cu_override)
+
+
+def _get_cu_override() -> int | None:
+    cu_env = os.getenv("CU_NUM")
+    if not cu_env:
+        return None
+
+    cu_override = _cu_num_or_none(cu_env)
+    if cu_override is None:
+        raise RuntimeError(f"CU_NUM={cu_env!r} must be a positive integer.")
+
+    return cu_override
+
+
+def _build_targets_from_archs(
+    archs: list[str], cu_override: int | None
+) -> list[tuple[str, int]]:
     if archs == ["native"]:
         raise RuntimeError(
             "GPU_ARCHS=native needs a live GPU to resolve. Name the arch, or use "
             "chip_info.get_build_targets() for the live-GPU fallback."
         )
+
     check_known_gfx(archs)
     targets = []
     for gfx in archs:
@@ -210,7 +253,8 @@ def get_build_targets_env() -> list[tuple[str, int]]:
                 f"AITER_BUILD_TARGETS='{gfx}:<cu_num>'."
             )
         targets.append((gfx, cu_override or GFX_CU_NUM_MAP[gfx]))
-    return list(dict.fromkeys(targets))
+
+    return targets
 
 
 def _target_mask(tune_df, gfx: str, cu_num: int):
