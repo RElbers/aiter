@@ -298,7 +298,30 @@ torch::Tensor
             )
             f.write(MAINFEST_end)
 
-    def gen_instances(self, kernels_dict):
+    def gen_tuning_arch_lookup(self, registries):
+        lines = ["{"]
+        for arch, registry in registries.items():
+            lines.append(f'    {{"{arch}", {{')
+            lines.extend(
+                f"        {{{kid}, {kernel.name}<DTYPE, ETYPE>}},"
+                for kid, kernel in registry.items()
+            )
+            lines.append("    }},")
+        lines.append("}")
+
+        path = Path(self.working_path) / "gemm_a8w8_bpreshuffle_cktile_lookup.h"
+        path.write_text(
+            "// SPDX-License-Identifier: MIT\n"
+            "// Copyright (C) 2026, Advanced Micro Devices, Inc. All rights reserved.\n"
+            "#pragma once\n\n"
+            "#ifdef USE_ROCM\n"
+            "#define AITER_CKTILE_TUNE_ARCH_LOOKUP 1\n"
+            "#define GENERATE_LOOKUP_TABLE(DTYPE, ETYPE) \\\n"
+            + " \\\n".join(lines)
+            + "\n#endif // USE_ROCM\n"
+        )
+
+    def gen_instances(self, kernels_dict, tuning_archs=None):
         if os.path.exists(self.impl_path):
             shutil.rmtree(self.impl_path)
         os.mkdir(self.impl_path)
@@ -309,7 +332,11 @@ torch::Tensor
         for k in kernels_dict.values():
             self.gen_instance(k)
 
-        self.gen_lookup_dict(kernels_dict)
+        if tuning_archs is None:
+            self.gen_lookup_dict(kernels_dict)
+        else:
+            self.gen_tuning_arch_lookup(tuning_archs)
+
         self.gen_manifest_head(kernels_dict)
 
 
@@ -380,7 +407,19 @@ if __name__ == "__main__":
     targets = resolve_build_targets(args.build_targets)
     codegen = gemm_a8w8_bpreshuffle_cktile_codegen(args.working_path, args.tune)
 
-    if args.tune:
+    if args.tune and targets is not None:
+        registries = {
+            arch: get_kernel_registry(arch)[0]
+            for arch in sorted({gfx for gfx, _ in targets})
+        }
+        # Kernel IDs are architecture-local; deduplicate implementations, not IDs.
+        kernels = {
+            kernel.name: kernel
+            for registry in registries.values()
+            for kernel in registry.values()
+        }
+        codegen.gen_instances(kernels, tuning_archs=registries)
+    elif args.tune:
         kernels_list, _ = get_kernel_registry()
         codegen.gen_instances(kernels_list)
     else:
