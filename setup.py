@@ -19,6 +19,9 @@ FLYDSL_VERSION = "flydsl==0.4.0"
 
 BUILD_TARGET = os.environ.get("BUILD_TARGET", "auto")
 PREBUILD_KERNELS = int(os.environ.get("PREBUILD_KERNELS", "0"))
+PREBUILD_MODULES = [
+    m.strip() for m in os.getenv("PREBUILD_MODULES", "").split(";") if m.strip()
+]
 # Opt-in: tag a wheel without compiled modules py3-none (see
 # _python_agnostic_bdist_wheel). Unset, wheels are tagged as before.
 AITER_PY3_WHEEL = os.environ.get("AITER_PY3_WHEEL", "0") == "1"
@@ -306,6 +309,14 @@ def get_exclude_ops():
 
 
 if PREBUILD_KERNELS != 0:
+    sys.path.insert(0, os.path.join(this_dir, "aiter"))
+    from jit.utils.build_targets import resolve_build_targets
+
+    explicit_targets = resolve_build_targets()
+    if explicit_targets is not None and PRETUNE_MODULES:
+        raise ValueError(
+            "Run live-GPU pretuning separately from an explicit cross-build"
+        )
     has_torch = True
     try:
         import torch as _
@@ -323,8 +334,23 @@ if PREBUILD_KERNELS != 0:
         )
         from jit.utils.moe_recipes import get_moe_ck2stages_prebuild_variants
 
-        exclude_ops = get_exclude_ops()
-        all_opts_args_build, _ = core.get_args_of_build("all", exclude=exclude_ops)
+        if PREBUILD_MODULES:
+            all_opts_args_build = []
+            for module in PREBUILD_MODULES:
+                build_args = core.get_args_of_build(
+                    module, build_targets=explicit_targets
+                )
+                if not build_args["srcs"]:
+                    raise ValueError(
+                        f"No build recipe for PREBUILD_MODULES entry {module!r}"
+                    )
+                build_args["md_name"] = module
+                all_opts_args_build.append(build_args)
+        else:
+            exclude_ops = get_exclude_ops()
+            all_opts_args_build, _ = core.get_args_of_build(
+                "all", exclude=exclude_ops, build_targets=explicit_targets
+            )
 
         moe_base_args = None
         filtered_opts_args_build = []
@@ -336,7 +362,9 @@ if PREBUILD_KERNELS != 0:
         all_opts_args_build = filtered_opts_args_build
 
         if ENABLE_CK and moe_base_args is not None:
-            moe_variants = get_moe_ck2stages_prebuild_variants(core.AITER_CSRC_DIR)
+            moe_variants = get_moe_ck2stages_prebuild_variants(
+                core.AITER_CSRC_DIR, build_targets=explicit_targets
+            )
             for v in moe_variants:
                 all_opts_args_build.append(
                     {
@@ -346,11 +374,12 @@ if PREBUILD_KERNELS != 0:
                         "flags_extra_hip": moe_base_args["flags_extra_hip"],
                         "extra_include": moe_base_args["extra_include"],
                         "blob_gen_cmd": v["blob_gen_cmd"],
+                        "build_targets": explicit_targets,
                         "third_party": moe_base_args["third_party"],
                     }
                 )
 
-        if PREBUILD_KERNELS == 1 and ENABLE_CK:
+        if PREBUILD_KERNELS == 1 and ENABLE_CK and not PREBUILD_MODULES:
             extra_args_build = []
 
             req_md_names = [
@@ -360,8 +389,12 @@ if PREBUILD_KERNELS != 0:
                 "mha_varlen_fwd_bf16_nlogits_nbias_mask_lse_ndropout_skip_nqscale",
                 "mha_varlen_fwd_bf16_nlogits_nbias_nmask_lse_ndropout_skip_nqscale",
             ]
-            variants = get_mha_varlen_prebuild_variants_by_names(req_md_names, ck_dir)
-            base_args = core.get_args_of_build("module_mha_varlen_fwd")
+            variants = get_mha_varlen_prebuild_variants_by_names(
+                req_md_names, ck_dir, build_targets=explicit_targets
+            )
+            base_args = core.get_args_of_build(
+                "module_mha_varlen_fwd", build_targets=explicit_targets
+            )
             for v in variants:
                 if not isinstance(base_args, dict) or not base_args.get("srcs"):
                     continue
@@ -373,6 +406,7 @@ if PREBUILD_KERNELS != 0:
                         "flags_extra_hip": base_args["flags_extra_hip"],
                         "extra_include": base_args["extra_include"],
                         "blob_gen_cmd": v["blob_gen_cmd"],
+                        "build_targets": explicit_targets,
                         "third_party": base_args["third_party"],
                     }
                 )
@@ -408,6 +442,10 @@ if PREBUILD_KERNELS != 0:
                 is_standalone=False,
                 torch_exclude=one_opt_args.get("torch_exclude", False),
                 third_party=one_opt_args["third_party"],
+                build_targets=one_opt_args.get("build_targets"),
+                flags_extra_hip_per_source=one_opt_args.get(
+                    "flags_extra_hip_per_source", {}
+                ),
             )
 
         prebuid_thread_num = 5
@@ -419,7 +457,7 @@ if PREBUILD_KERNELS != 0:
         os.environ["PREBUILD_THREAD_NUM"] = str(prebuid_thread_num)
 
         # --- FlyDSL AOT pre-compilation (MOE + GEMM, before CK) ---
-        if not IS_WINDOWS:
+        if not IS_WINDOWS and not PREBUILD_MODULES:
             _prev_aot_import = os.environ.get("AITER_AOT_IMPORT")
             os.environ["AITER_AOT_IMPORT"] = "1"
             try:
@@ -428,7 +466,7 @@ if PREBUILD_KERNELS != 0:
                 flydsl_cache_dir = os.path.join(
                     this_dir, "aiter", "jit", "flydsl_cache"
                 )
-                run_aot(flydsl_cache_dir)
+                run_aot(flydsl_cache_dir, build_targets=explicit_targets)
             finally:
                 if _prev_aot_import is None:
                     os.environ.pop("AITER_AOT_IMPORT", None)

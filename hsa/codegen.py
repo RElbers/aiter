@@ -77,7 +77,6 @@ def read_csv_strip_comments(path: str, **kwargs):
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
 base_dir = os.path.basename(this_dir)
-archs = [el for el in os.environ["AITER_GPU_ARCHS"].split(";")]
 archs_supported = [
     os.path.basename(os.path.normpath(path)) for path in glob.glob(f"{this_dir}/*/")
 ]
@@ -110,7 +109,32 @@ if __name__ == "__main__":
         required=False,
         help="write all the blobs into a directory",
     )
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    import importlib.util
+
+    utils_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../aiter/jit/utils")
+    )
+    if not os.path.isdir(utils_dir):
+        package = importlib.util.find_spec("aiter")
+        if package is None or not package.submodule_search_locations:
+            raise ImportError("aiter package not found")
+        utils_dir = os.path.join(
+            next(iter(package.submodule_search_locations)), "jit", "utils"
+        )
+    sys.path.insert(0, utils_dir)
+    from build_targets import resolve_build_targets
+
+    targets = resolve_build_targets(args.build_targets)
+    if targets is not None:
+        archs = sorted({gfx for gfx, _ in targets})
+    else:
+        from chip_info import get_gfx_list
+
+        archs = get_gfx_list()
     cfgs = []
 
     csv_groups = defaultdict(list)

@@ -17,6 +17,7 @@ AITER_CORE_DIR = (
     else os.path.abspath(f"{this_dir}/../../aiter/jit/utils")
 )
 sys.path.insert(0, AITER_CORE_DIR)
+from build_targets import resolve_build_targets
 from chip_info import build_tune_dict, write_lookup_header
 from deepgemm_common import (
     default_kernels_dict,
@@ -243,10 +244,14 @@ torch::Tensor
         self.gen_manifest_head(kernels_dict)
 
 
-def get_tune_dict(tune_dict_csv):
+def get_tune_dict(tune_dict_csv, targets=None):
     if os.path.exists(tune_dict_csv):
         return build_tune_dict(
-            pd.read_csv(tune_dict_csv), default_kernels_dict, kernels_list
+            pd.read_csv(tune_dict_csv),
+            default_kernels_dict,
+            kernels_list,
+            targets=targets,
+            tune_source=tune_dict_csv,
         )
     return default_kernels_dict
 
@@ -296,11 +301,15 @@ if __name__ == "__main__":
     #         same: [same as out]"
     # )
 
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_build_targets(args.build_targets)
     # TODO: use tune flag.
     codegen = deepgemm_codegen(args.working_path, False)
 
     # if args.tune:
     codegen.gen_instances(kernels_list)
     # else:
-    # codegen.gen_instances(get_tune_dict(args.tune_file))
+    # codegen.gen_instances(get_tune_dict(args.tune_file, targets))

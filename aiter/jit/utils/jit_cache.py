@@ -290,6 +290,10 @@ def stage_blob_sources(
         _seed_staging_files(staging_dir, seed_files)
 
         output_dir = os.path.join(staging_dir, "")
+        # Explicit builds pass their request as codegen arguments. A runtime JIT
+        # child must not activate a build-only request left in the caller's shell.
+        codegen_env = os.environ.copy()
+        codegen_env.pop("AITER_BUILD_TARGETS", None)
         for command in commands:
             formatted_command = command.format(output_dir)
             # shlex.split() reads a backslash as an escape, so a Windows
@@ -297,7 +301,7 @@ def stage_blob_sources(
             args = [python_executable, *shlex.split(_posix_path(formatted_command))]
             if log_commands and logger is not None:
                 logger.info("exec_blob ---> %s", shlex.join(args))
-            subprocess.run(args, check=True)
+            subprocess.run(args, check=True, env=codegen_env)
 
         generated_build_inputs = [
             os.path.join(root, filename)

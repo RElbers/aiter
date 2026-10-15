@@ -49,6 +49,9 @@ _DEFAULT_COMBINE_BLOCK_NUM = 128
 _DEFAULT_COMBINE_WARP_NUM = 8
 
 
+from .common import OpKind, resolve_aot_targets, select_aot_jobs
+
+
 def _group_major_geometry(
     mtpr,
     experts_per_rank,
@@ -561,7 +564,11 @@ def main():
         choices=DEFAULT_QUANTS,
         default=list(DEFAULT_QUANTS),
     )
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_aot_targets(args.build_targets)
     default_shape = (
         list(args.experts_per_rank) == list(DEFAULT_EXPERTS_PER_RANKS)
         and args.topk == TOPK
@@ -590,6 +597,7 @@ def main():
             situ_beta=args.situ_beta,
             situ_linear_beta=args.situ_linear_beta,
         )
+    jobs = select_aot_jobs(OpKind.MEGA_MOE, jobs, targets)
     results = run_jobs_parallel(compile_one_config, jobs)
     failed = sum(result["compile_time"] is None for result in results)
     print(f"Compiled: {len(results) - failed} ok, {failed} failed")

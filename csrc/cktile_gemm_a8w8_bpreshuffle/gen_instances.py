@@ -17,14 +17,14 @@ AITER_CORE_DIR = (
     else os.path.abspath(f"{this_dir}/../../aiter/jit/utils")
 )
 sys.path.insert(0, AITER_CORE_DIR)
+from build_targets import resolve_build_targets
 from chip_info import build_tune_dict, write_lookup_header
 from gemm_a8w8_bpreshuffle_cktile_common import (
     DEFAULT_PIPELINE,
     PIPELINE_IDS,
-    default_kernels_dict,
+    get_kernel_registry,
     kernelInstance,
     kernels_by_name,
-    kernels_list,
 )
 
 """
@@ -313,16 +313,37 @@ torch::Tensor
         self.gen_manifest_head(kernels_dict)
 
 
-def get_tune_dict(tune_dict_csv):
-    if os.path.exists(tune_dict_csv):
+def get_tune_dict(tune_dict_csv, targets=None):
+    if targets is None:
+        kernels_list, defaults = get_kernel_registry()
+        if not os.path.exists(tune_dict_csv):
+            return defaults
         return build_tune_dict(
             pd.read_csv(tune_dict_csv),
-            default_kernels_dict,
+            defaults,
             kernels_list,
             libtype="cktile",
             kernels_by_name=kernels_by_name,
         )
-    return default_kernels_dict
+    tune_dict = {}
+    defaults = {}
+    for arch in sorted({gfx for gfx, _ in targets}):
+        kernels_list, arch_defaults = get_kernel_registry(arch)
+        defaults.update((kernel.name, kernel) for kernel in arch_defaults.values())
+        if os.path.exists(tune_dict_csv):
+            tune_dict.update(
+                build_tune_dict(
+                    pd.read_csv(tune_dict_csv),
+                    {},
+                    kernels_list,
+                    libtype="cktile",
+                    kernels_by_name=kernels_by_name,
+                    targets=tuple(pair for pair in targets if pair[0] == arch),
+                    tune_source=tune_dict_csv,
+                )
+            )
+    tune_dict.update((-i, kernel) for i, kernel in enumerate(defaults.values(), 1))
+    return tune_dict
 
 
 if __name__ == "__main__":
@@ -352,10 +373,15 @@ if __name__ == "__main__":
         "--tune", action="store_true", required=False, help="generated tune instanses"
     )
 
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_build_targets(args.build_targets)
     codegen = gemm_a8w8_bpreshuffle_cktile_codegen(args.working_path, args.tune)
 
     if args.tune:
+        kernels_list, _ = get_kernel_registry()
         codegen.gen_instances(kernels_list)
     else:
-        codegen.gen_instances(get_tune_dict(args.tune_file))
+        codegen.gen_instances(get_tune_dict(args.tune_file, targets))

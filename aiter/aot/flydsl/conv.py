@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import csv
 import os
-import re
 import sys
 import time
 
@@ -88,6 +87,9 @@ _CONFIG_COLS = TUNED_RESULT_COLUMNS
 
 # Dropped from the dyn_hw compile-dedupe key (one artifact per layer).
 _RESOLUTION_COLS = ("N", "D", "H", "W")
+
+
+from .common import OpKind, resolve_aot_targets, select_aot_jobs
 
 
 def _conv_dedupe_key(job):
@@ -160,19 +162,10 @@ def _row_npq_per_sample(shape) -> int:
     )
 
 
-def _requested_archs():
-    """ARCH / GPU_ARCHS as a set, or None. Applied in parse_csv so setup.py's run_aot sees it."""
-    arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
-    if not arch:
-        return None
-    return {a.strip() for a in re.split(r"[;,]", arch) if a.strip()} or None
-
-
 def parse_csv(csv_path: str):
     """Parse the tuned conv CSV into unique conv and transpose compile jobs."""
     jobs = []
     seen = set()
-    keep_archs = _requested_archs()
 
     with open(csv_path, newline="") as f:
         for raw in csv.DictReader(f):
@@ -201,8 +194,6 @@ def parse_csv(csv_path: str):
 
             cu_num = int(row.get("cu_num") or 0)
             gfx = row.get("gfx", "")
-            if keep_archs is not None and job_arch(cu_num, gfx) not in keep_archs:
-                continue
 
             groups = shape["groups"]
             cgp = _pad_channels(shape["C"] // groups)
@@ -470,7 +461,11 @@ def main():
         default=DEFAULT_CSVS,
         help="Path(s) to tuned CSV config file(s); defaults come from AITER_CONFIGS",
     )
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_aot_targets(args.build_targets)
 
     csv_paths = [os.path.abspath(p) for p in args.csv]
     for csv_path in csv_paths:
@@ -484,6 +479,7 @@ def main():
     arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
 
     all_jobs = collect_aot_jobs(csv_paths, parse_csv)
+    all_jobs = select_aot_jobs(OpKind.CONV, all_jobs, targets)
     if arch:
         print(f"[aiter] ARCH={arch}: {len(all_jobs)} jobs match")
 
