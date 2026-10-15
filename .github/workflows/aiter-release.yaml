@@ -195,7 +195,15 @@ jobs:
 
       - name: Resolve GPU build destinations
         if: ${{ matrix.build_enabled }}
-        run: python3 .github/scripts/resolve_gpu_build_input.py
+        run: |
+          if [ -f .github/scripts/resolve_gpu_build_input.py ]; then
+            python3 .github/scripts/resolve_gpu_build_input.py
+          elif [[ "${GPU_ARCHS}" == *:* ]]; then
+            echo "::error::Selected revision ${BUILD_REF} does not support explicit GPU build targets. Use architecture-only gpu_archs or select a newer revision."
+            exit 1
+          else
+            echo "AITER_BUILD_TARGETS=" >> "${GITHUB_ENV}"
+          fi
 
       - name: Sync submodules
         if: ${{ matrix.build_enabled }}

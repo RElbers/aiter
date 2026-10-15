@@ -31,6 +31,11 @@ Live-GPU pretuning must run separately from explicit cross-builds. Keep
 `AITER_JIT_DIR` unset for a wheel so native modules land in its normal package
 location; standalone prebuilds can use it to select their output directory.
 
+The CK Tile preshuffled GEMM tuning module can also be cross-built through
+`aiter/jit/prebuild.py` or `PREBUILD_MODULES`. Its candidate tables retain each
+architecture's kernel IDs, and execution selects the table for the current GPU.
+Several CU variants of one architecture share the same candidate table.
+
 ## Input and compatibility
 
 The syntax is semicolon-separated `gfx:positive_cu_count` pairs. Supported names
@@ -138,3 +143,7 @@ A build step translates this into architecture-only `GPU_ARCHS` and explicit
 in the summary. Legacy architecture-only workflow inputs remain unchanged. This
 keeps the release workflow within the ten `workflow_dispatch` input limit; it
 does not extend the syntax of the `GPU_ARCHS` environment variable.
+
+When the workflow builds an older revision without explicit-target support,
+architecture-only inputs still work. Explicit pairs are rejected with an
+unsupported-revision error rather than silently losing the requested CU variants.
