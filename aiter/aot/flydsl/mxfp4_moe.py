@@ -21,7 +21,14 @@ import sys
 import time
 from contextlib import nullcontext
 
-from aiter.aot.flydsl.common import collect_aot_jobs, compile_only_env, override_env
+from aiter.aot.flydsl.common import (
+    OpKind,
+    collect_aot_jobs,
+    compile_only_env,
+    override_env,
+    resolve_aot_targets,
+    select_aot_jobs,
+)
 from aiter.jit.core import AITER_CONFIGS, AITER_ROOT_DIR
 
 _MODEL_CONFIG_DIR = f"{AITER_ROOT_DIR}/aiter/configs/model_configs"
@@ -41,9 +48,6 @@ if os.path.exists(_ACTIVE_FMOE_CSV) and _ACTIVE_FMOE_CSV not in DEFAULT_CSVS:
 
 # Mirror the runtime gate so the default build skips the opt-in mxfp4-out path.
 _MXFP4_INTERMEDIATE = os.environ.get("AITER_MXFP4_INTERMEDIATE", "0") not in ("0", "")
-
-
-from .common import OpKind, resolve_aot_targets, select_aot_jobs
 
 
 def _job_key(job: dict) -> tuple:

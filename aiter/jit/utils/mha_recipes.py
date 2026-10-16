@@ -7,8 +7,9 @@ def _ck_targets_flag(build_targets=None) -> str:
     keep the default (covers both gfx942 and gfx950 like before).
     """
     if build_targets is not None:
-        archs = sorted({"gfx9" if gfx == "gfx942" else gfx for gfx, _ in build_targets})
-        return " --targets " + ",".join(archs)
+        from build_targets import ck_tile_target_families
+
+        return " --targets " + ck_tile_target_families(build_targets)
     try:
         from chip_info import get_gfx
 

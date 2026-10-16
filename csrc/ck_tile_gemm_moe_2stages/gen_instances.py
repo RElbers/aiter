@@ -565,7 +565,9 @@ if __name__ == "__main__":
         help="select quant_type",
     )
 
-    parser.add_argument("--build-targets")
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
     targets = resolve_build_targets(args.build_targets)
     archs = sorted({gfx for gfx, _ in targets}) if targets else get_gfx_list()

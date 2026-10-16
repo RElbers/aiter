@@ -345,8 +345,7 @@ if __name__ == "__main__":
         "--tune", action="store_true", required=False, help="generated tune instances"
     )
     parser.add_argument(
-        "--build-targets",
-        help="Explicit gfx:CU pairs separated by ';'; defaults to AITER_BUILD_TARGETS",
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
     )
 
     # parser.add_argument(

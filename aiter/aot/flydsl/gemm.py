@@ -50,12 +50,15 @@ import flydsl.compiler as flyc
 import flydsl.expr as fx
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     collect_aot_jobs,
     compile_only_env,
     cu_num_to_arch,
     job_identity,
     override_env,
+    resolve_aot_targets,
     run_jobs_parallel,
+    select_aot_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.batched_gemm_a8w8_gfx950 import (
@@ -153,9 +156,6 @@ _SHORT_DTYPE = {
     "B16": "bf16",
     "F16": "fp16",
 }
-
-
-from .common import OpKind, resolve_aot_targets, select_aot_jobs
 
 
 def _parse_bool(value: str | None) -> bool:

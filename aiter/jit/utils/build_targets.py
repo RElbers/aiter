@@ -109,6 +109,11 @@ def format_build_targets(targets: BuildTargets) -> str:
     return ";".join(f"{gfx}:{cu_num}" for gfx, cu_num in targets)
 
 
+def ck_tile_target_families(targets: BuildTargets) -> str:
+    """CK Tile generator --targets value; gfx9 is its family name for gfx942."""
+    return ",".join(sorted({"gfx9" if gfx == "gfx942" else gfx for gfx, _ in targets}))
+
+
 def _parse_gpu_archs_env(gfx_env: str) -> list[str]:
     """Split a GPU_ARCHS string into a list of non-empty architecture names.
 

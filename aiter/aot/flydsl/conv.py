@@ -27,12 +27,15 @@ import sys
 import time
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     collect_aot_jobs,
     compile_only_env,
     cu_num_to_arch,
     job_identity,
     override_env,
+    resolve_aot_targets,
     run_jobs_parallel,
+    select_aot_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.conv_kernels import (
@@ -87,9 +90,6 @@ _CONFIG_COLS = TUNED_RESULT_COLUMNS
 
 # Dropped from the dyn_hw compile-dedupe key (one artifact per layer).
 _RESOLUTION_COLS = ("N", "D", "H", "W")
-
-
-from .common import OpKind, resolve_aot_targets, select_aot_jobs
 
 
 def _conv_dedupe_key(job):
