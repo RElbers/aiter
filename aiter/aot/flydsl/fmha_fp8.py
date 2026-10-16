@@ -25,10 +25,13 @@ import sys
 import time
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     compile_only_env,
     dedupe_jobs,
     override_env,
+    resolve_aot_targets,
     run_jobs_parallel,
+    select_aot_jobs,
 )
 
 AOT_ARCH = "gfx950"
@@ -52,9 +55,6 @@ _DEFAULT_FLAGS = {
     "setprio": True,
     "enable_stagger": True,
 }
-
-
-from .common import OpKind, resolve_aot_targets, select_aot_jobs
 
 
 def _layout(value: str | None) -> str:

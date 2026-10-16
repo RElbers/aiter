@@ -34,12 +34,15 @@ from typing import Any
 import flydsl.expr as fx
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     collect_aot_jobs,
     compile_only_env,
     cu_num_to_arch,
     job_identity,
     override_env,
+    resolve_aot_targets,
     run_jobs_parallel,
+    select_aot_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.kernels.gdr_prefill import compile_chunk_gated_delta_h
@@ -69,9 +72,6 @@ _FIXED_SWITCHES: dict[str, bool] = {
     "g_log2_scaled": True,
     "bf16_convert_trunc": True,
 }
-
-
-from .common import OpKind, resolve_aot_targets, select_aot_jobs
 
 
 def _parse_bool(s: str) -> bool:

@@ -1137,7 +1137,9 @@ if __name__ == "__main__":
         help="enable moe_stage1 splitk mode",
     )
 
-    parser.add_argument("--build-targets")
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
     from build_targets import resolve_build_targets
 

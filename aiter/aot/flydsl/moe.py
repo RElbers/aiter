@@ -29,12 +29,16 @@ import sys
 import time
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     collect_aot_jobs,
+    compile_cu_env,
     compile_only_env,
     cu_num_to_arch,
     job_identity,
     override_env,
+    resolve_aot_targets,
     run_jobs_parallel,
+    select_aot_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.kernels.tensor_shim import ptr_arg as _ptr_view_safe
@@ -64,9 +68,6 @@ DEFAULT_CSVS = [
     AITER_CONFIGS.AITER_CONFIG_FHMOE_FILE,
 ]
 MOE_AOT_ARCH_DEFAULT = "gfx950"
-
-
-from .common import OpKind, compile_cu_env, resolve_aot_targets, select_aot_jobs
 
 
 def _mx_w2_scale_numel(experts: int, model_dim: int, inter_dim: int) -> int:

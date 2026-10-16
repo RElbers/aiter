@@ -15,7 +15,14 @@ from pathlib import Path
 import flydsl.expr as fx
 import torch
 
-from aiter.aot.flydsl.common import compile_only_env, override_env, run_jobs_parallel
+from aiter.aot.flydsl.common import (
+    OpKind,
+    compile_only_env,
+    override_env,
+    resolve_aot_targets,
+    run_jobs_parallel,
+    select_aot_jobs,
+)
 from aiter.ops.flydsl.kernels.mega_moe.mega_moe_config import (
     build_mega_moe_bundle_plan,
 )
@@ -47,9 +54,6 @@ NUM_CU = 256
 SWIGLU_LIMIT = 10.0
 _DEFAULT_COMBINE_BLOCK_NUM = 128
 _DEFAULT_COMBINE_WARP_NUM = 8
-
-
-from .common import OpKind, resolve_aot_targets, select_aot_jobs
 
 
 def _group_major_geometry(

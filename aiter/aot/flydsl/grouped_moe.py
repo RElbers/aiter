@@ -14,11 +14,14 @@ import time
 import traceback
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     collect_aot_jobs,
     compile_only_env,
     job_identity,
     override_env,
+    resolve_aot_targets,
     run_jobs_parallel,
+    select_aot_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.kernels.tensor_shim import ptr_arg
@@ -27,9 +30,6 @@ from aiter_worker_limits import adopt_legacy_max_jobs
 DEFAULT_CSVS = [AITER_CONFIGS.AITER_CONFIG_GROUPED_FMOE_FILE]
 _WARP_TILE_N = 64
 _TILE_K = 256
-
-
-from .common import OpKind, resolve_aot_targets, select_aot_jobs
 
 
 def _align_up(value: int, alignment: int) -> int:

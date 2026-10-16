@@ -1685,7 +1685,7 @@ def _get_ck_exclude_modules():
 
 def _target_codegen_commands(commands, targets):
     """Adapt only generators that consume destinations; others are target-neutral."""
-    from build_targets import format_build_targets
+    from build_targets import ck_tile_target_families, format_build_targets
 
     if isinstance(commands, list):
         return [_target_codegen_commands(cmd, targets) for cmd in commands]
@@ -1716,9 +1716,7 @@ def _target_codegen_commands(commands, targets):
             commands + " --build-targets " + shlex.quote(format_build_targets(targets))
         )
     if name == "generate.py" and parent == "01_fmha":
-        # gfx9 is CK Tile's family name for gfx942; gfx950 has its own recipes.
-        archs = sorted({"gfx9" if gfx == "gfx942" else gfx for gfx, _ in targets})
-        return commands + " --targets " + ",".join(archs)
+        return commands + " --targets " + ck_tile_target_families(targets)
     return commands
 
 
