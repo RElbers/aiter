@@ -376,8 +376,9 @@ def get_gemm1_kernels_list(
     MulRoutedWeight: bool,
     preshuffle: bool = False,
     splitk: bool = False,
+    arch=None,
 ) -> list:
-    arch = get_gfx()
+    arch = get_gfx() if arch is None else arch
     if (
         Adtype in bit16_list
         and Bdtype in bit16_list
@@ -454,8 +455,9 @@ def get_gemm2_kernels_list(
     QuantType: str,
     MulRoutedWeight: bool,
     preshuffle: bool = False,
+    arch=None,
 ) -> list:
-    arch = get_gfx()
+    arch = get_gfx() if arch is None else arch
 
     if (
         Adtype in bit16_list

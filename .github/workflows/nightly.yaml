@@ -15,7 +15,7 @@ on:
         type: string
         required: false
       gpu_archs:
-        description: 'GPU architectures (default: gfx942;gfx950)'
+        description: 'GPU architectures or gfx:CU pairs (default: gfx942;gfx950)'
         type: string
         required: false
       skip_tests:

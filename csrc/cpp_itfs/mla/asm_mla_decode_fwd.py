@@ -1,4 +1,5 @@
 import functools
+import os
 
 import triton
 from jinja2 import Template
@@ -6,12 +7,13 @@ from triton.tools.compile import CompileArgs, compile_kernel
 
 from csrc.cpp_itfs.utils import (
     AITER_CORE_DIR,
-    GPU_ARCH,
     compile_template_op,
     get_default_func_name,
+    get_hsaco_arch,
     not_built,
     run_lib,
     transfer_hsaco,
+    validate_and_update_archs,
 )
 
 MD_NAME = "asm_mla_decode_fwd"
@@ -42,24 +44,40 @@ def compile(
     num_kv_splits: int,
     v_head_dim: int,
     func_name: str | None = None,
+    *,
+    build_targets=None,
 ):
+    if build_targets is None:
+        arch = get_hsaco_arch()
+    else:
+        archs = validate_and_update_archs(build_targets)
+        if len(archs) != 1:
+            raise ValueError(
+                "MLA embeds one destination's code objects per library; use prebuild() for multiple architectures"
+            )
+        arch = archs[0]
     if func_name is None:
         func_name = get_default_func_name(
             MD_NAME,
             (gqa_ratio, page_size, q_dtype, kv_dtype, num_kv_splits, v_head_dim),
         )
 
-    if not_built(func_name):
+    if not_built(func_name, build_targets=build_targets):
         if gqa_ratio == 128:
-            hsaco_path = f"{AITER_CORE_DIR}/hsa/{GPU_ARCH}/mla/mla_dec_stage1_bf16_a16w16_subQ128_mqa128.co"
+            hsaco_path = f"{AITER_CORE_DIR}/hsa/{arch}/mla/mla_dec_stage1_bf16_a16w16_subQ128_mqa128.co"
             kernel_name = "_ZN5aiter41mla_dec_stage1_bf16_a16w16_subQ128_mqa128E"
         else:
-            hsaco_path = f"{AITER_CORE_DIR}/hsa/{GPU_ARCH}/mla/mla_dec_stage1_bf16_a16w16_subQ16_mqa16.co"
+            hsaco_path = f"{AITER_CORE_DIR}/hsa/{arch}/mla/mla_dec_stage1_bf16_a16w16_subQ16_mqa16.co"
             kernel_name = "_ZN5aiter39mla_dec_stage1_bf16_a16w16_subQ16_mqa16E"
 
+        if not os.path.isfile(hsaco_path):
+            raise FileNotFoundError(
+                f"No embedded MLA code object for destination {arch}: {hsaco_path}"
+            )
         bin_size, bin_data = transfer_hsaco(hsaco_path)
         compile_args = CompileArgs(
             path=f"{AITER_CORE_DIR}/aiter/mla.py",
+            target=f"hip:{arch}:64",
             kernel_name="_fwd_kernel_stage2_asm",
             signature=f"*fp32:16,*fp32:16,*bf16:16,*i32:16,*i32:16,i32,i32,i32,i32,i32,i32,i32,i32,{num_kv_splits},{triton.next_power_of_2(v_head_dim)},{v_head_dim},{mgcs[gqa_ratio]}",
             grid="bs,nheads,max_seqlen_q",
@@ -91,9 +109,26 @@ def compile(
             triton_kernel=triton_kernel,
             num_kv_splits=num_kv_splits,
             func_name=func_name,
+            build_targets=build_targets,
         )
     else:
-        return run_lib(func_name)
+        return run_lib(func_name, build_targets=build_targets)
+
+
+def prebuild(*, build_targets=None, **specialization):
+    """Build separate embedded-object libraries for every requested destination."""
+    from build_targets import resolve_build_targets
+
+    targets = resolve_build_targets(build_targets)
+    if targets is None:
+        raise ValueError("MLA prebuild requires explicit build targets")
+    return {
+        arch: compile(
+            **specialization,
+            build_targets=tuple(pair for pair in targets if pair[0] == arch),
+        )
+        for arch in sorted({gfx for gfx, _ in targets})
+    }
 
 
 def asm_mla_decode_fwd(

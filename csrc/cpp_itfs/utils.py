@@ -93,11 +93,6 @@ AITER_PYTHON_ROOT_DIR = (
 )
 sys.path.insert(0, os.path.join(AITER_PYTHON_ROOT_DIR, "aiter", "jit", "utils"))
 
-from chip_info import get_gfx_runtime
-
-GPU_ARCH = os.environ.get("GPU_ARCHS")
-if GPU_ARCH is None:
-    GPU_ARCH = get_gfx_runtime()
 AITER_REBUILD = int(os.environ.get("AITER_REBUILD", "0"))
 
 HOME_PATH = (
@@ -122,7 +117,7 @@ CK_DIR = os.environ.get("CK_DIR", f"{AITER_CORE_DIR}/3rdparty/composable_kernel"
 
 makefile_template = Template("""
 CXX=hipcc
-TARGET=lib.so
+TARGET={{target}}
 
 SRCS = {{sources | join(" ")}}
 OBJS = $(SRCS:.cpp=.o)
@@ -169,7 +164,7 @@ def mp_lock(
     """
     Using FileBaton for multiprocessing.
     """
-    from aiter.jit.utils.file_baton import FileBaton
+    from file_baton import FileBaton
 
     baton = FileBaton(lock_path)
     if baton.try_acquire():
@@ -213,8 +208,25 @@ def hip_flag_checker(flag_hip: str) -> bool:
         return False
 
 
-def validate_and_update_archs():
-    archs = GPU_ARCH.split(";")
+def _template_runtime_arch():
+    # Match utils.h's hipGetDevice/GetDeviceProperties, including a caller that
+    # switches the current device in a process with heterogeneous GPUs.
+    import torch
+
+    return torch.cuda.get_device_properties(
+        torch.cuda.current_device()
+    ).gcnArchName.split(":")[0]
+
+
+def validate_and_update_archs(build_targets=None):
+    if build_targets is not None:
+        from build_targets import resolve_build_targets
+
+        targets = resolve_build_targets(build_targets)
+        if targets is None:
+            raise ValueError("An explicit template build request must not be empty")
+        return sorted({gfx for gfx, _ in targets})
+    archs = os.environ.get("GPU_ARCHS", "native").split(";")
     archs = [arch.strip().split(":")[0] for arch in archs]
     # List of allowed architectures
     allowed_archs = [
@@ -234,13 +246,34 @@ def validate_and_update_archs():
     ), f"One of GPU archs of {archs} is invalid or not supported"
     for i in range(len(archs)):
         if archs[i] == "native":
-            archs[i] = get_gfx_runtime()
+            archs[i] = _template_runtime_arch()
 
-    return archs
+    return sorted(set(archs))
 
 
-def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
-    sub_build_dir = os.path.join(BUILD_DIR, folder)
+def _library_path(folder, archs):
+    """Find compatible coverage; old unqualified libraries must be rebuilt.
+
+    Python and utils.h share build/targets/<sorted arches joined by +>/<folder>.
+    CU counts do not affect these HIP libraries' instruction compatibility.
+    """
+    root = os.path.join(BUILD_DIR, "targets")
+    exact = os.path.join(root, "+".join(archs), folder, LIB_BASENAME)
+    if os.path.isfile(exact):
+        return exact
+    if os.path.isdir(root):
+        for entry in sorted(os.listdir(root)):
+            candidate = os.path.join(root, entry, folder, LIB_BASENAME)
+            if set(archs) <= set(entry.split("+")) and os.path.isfile(candidate):
+                return candidate
+    return exact
+
+
+def compile_lib(
+    src_file, folder, includes=None, sources=None, cxxflags=None, *, build_targets=None
+):
+    archs = validate_and_update_archs(build_targets)
+    sub_build_dir = os.path.dirname(_library_path(folder, archs))
     include_dir = f"{sub_build_dir}/include"
     if not os.path.exists(include_dir):
         os.makedirs(include_dir, exist_ok=True)
@@ -248,6 +281,8 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
     start_ts = time.perf_counter()
 
     def main_func(includes=None, sources=None, cxxflags=None):
+        if os.path.isfile(os.path.join(sub_build_dir, LIB_BASENAME)):
+            return
         logger.info(f"start build {sub_build_dir}")
         if includes is None:
             includes = []
@@ -266,11 +301,11 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
                 shutil.copytree(source, sub_build_dir, dirs_exist_ok=True)
             else:
                 shutil.copy(source, sub_build_dir)
-        with open(f"{sub_build_dir}/{folder}.cpp", "w") as f:
+        with open(f"{sub_build_dir}/kernel.cpp", "w") as f:
             f.write(src_file)
 
-        sources += [f"{folder}.cpp"]
-        cxxflags += [
+        sources = list(sources) + ["kernel.cpp"]
+        cxxflags = list(cxxflags) + [
             "-DUSE_ROCM",
             "-DENABLE_FP8",
             "-DENABLE_CK=1",
@@ -314,7 +349,6 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
             ]
         if hip_version > Version("6.2.41133"):
             cxxflags += ["-mllvm -amdgpu-coerce-illegal-types=1"]
-        archs = validate_and_update_archs()
         cxxflags += [f"--offload-arch={arch}" for arch in archs]
         cxxflags = [flag for flag in set(cxxflags) if hip_flag_checker(flag)]
         if IS_WINDOWS:
@@ -325,7 +359,7 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
                 includes=[f"-I{_ninja_path(include_dir)}"],
                 sources=[_ninja_path(s) for s in sources],
                 cxxflags=cxxflags,
-                target=LIB_BASENAME,
+                target=LIB_BASENAME + ".tmp",
             )
             with open(os.path.join(sub_build_dir, "build.ninja"), "w") as f:
                 f.write(ninja_file)
@@ -338,7 +372,10 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
             )
         else:
             makefile_file = makefile_template.render(
-                includes=[f"-I{include_dir}"], sources=sources, cxxflags=cxxflags
+                includes=[f"-I{include_dir}"],
+                sources=sources,
+                cxxflags=cxxflags,
+                target=LIB_BASENAME + ".tmp",
             )
             with open(f"{sub_build_dir}/Makefile", "w") as f:
                 f.write(makefile_file)
@@ -350,6 +387,11 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
                 check=True,
             )
 
+        os.replace(
+            os.path.join(sub_build_dir, LIB_BASENAME + ".tmp"),
+            os.path.join(sub_build_dir, LIB_BASENAME),
+        )
+
     def final_func():
         logger.info(
             f"finish build {sub_build_dir}, cost {time.perf_counter()-start_ts:.8f}s"
@@ -359,14 +401,31 @@ def compile_lib(src_file, folder, includes=None, sources=None, cxxflags=None):
         main_func, includes=includes, sources=sources, cxxflags=cxxflags
     )
 
-    mp_lock(lock_path=lock_path, main_func=main_func, final_func=final_func)
+    mp_lock(
+        lock_path=lock_path,
+        main_func=main_func,
+        final_func=final_func,
+        wait_func=partial(
+            compile_lib,
+            src_file,
+            folder,
+            includes,
+            sources,
+            cxxflags,
+            build_targets=build_targets,
+        ),
+    )
+
+
+def run_lib(func_name, folder=None, *, build_targets=None):
+    lib_path = _library_path(
+        folder or func_name, validate_and_update_archs(build_targets)
+    )
+    return _load_lib(func_name, lib_path)
 
 
 @lru_cache(maxsize=AITER_MAX_CACHE_SIZE)
-def run_lib(func_name, folder=None):
-    if folder is None:
-        folder = func_name
-    lib_path = os.path.join(BUILD_DIR, folder, LIB_BASENAME)
+def _load_lib(func_name, lib_path):
     # os.RTLD_LAZY does not exist on Windows.
     mode = os.RTLD_LAZY if not IS_WINDOWS else 0
     lib = ctypes.CDLL(lib_path, mode)
@@ -383,8 +442,10 @@ def get_default_func_name(md_name, args: tuple):
     return f"{md_name}_{hash_signature(signature)}"
 
 
-def not_built(folder):
-    return not os.path.exists(os.path.join(BUILD_DIR, folder, LIB_BASENAME))
+def not_built(folder, *, build_targets=None):
+    return not os.path.isfile(
+        _library_path(folder, validate_and_update_archs(build_targets))
+    )
 
 
 def compile_template_op(
@@ -395,6 +456,7 @@ def compile_template_op(
     cxxflags=None,
     func_name=None,
     folder=None,
+    build_targets=None,
     **kwargs,
 ):
     kwargs = OrderedDict(kwargs)
@@ -403,7 +465,7 @@ def compile_template_op(
     if folder is None:
         folder = func_name
 
-    if not_built(folder):
+    if not_built(folder, build_targets=build_targets):
         if includes is None:
             includes = []
         if sources is None:
@@ -412,8 +474,10 @@ def compile_template_op(
             cxxflags = []
         logger.info(f"compile_template_op {func_name = } with {locals()}...")
         src_file = src_template.render(func_name=func_name, **kwargs)
-        compile_lib(src_file, folder, includes, sources, cxxflags)
-    return run_lib(func_name, folder)
+        compile_lib(
+            src_file, folder, includes, sources, cxxflags, build_targets=build_targets
+        )
+    return run_lib(func_name, folder, build_targets=build_targets)
 
 
 def transfer_hsaco(hsaco_path):
@@ -482,10 +546,11 @@ def compile_hsaco(
     kernel_name,
     hsaco,
     shared=0,
-    gcnArchName=GPU_ARCH,
+    gcnArchName=None,
     constexprs=None,
     extra_metadata=None,
 ):
+    gcnArchName = gcnArchName or get_hsaco_arch()
     build_dir = f"{BUILD_DIR}/{gcnArchName}"
     constexprs = OrderedDict(constexprs or {})
     func_name = get_default_func_name(kernel_name, tuple(constexprs.values()))
@@ -514,17 +579,31 @@ def compile_hsaco(
     mp_lock(lock_path=lock_path, main_func=main_func, final_func=final_func)
 
 
+def get_hsaco_arch():
+    archs = validate_and_update_archs()
+    if len(archs) != 1:
+        raise ValueError(
+            "An embedded code object requires one destination architecture"
+        )
+    return archs[0]
+
+
 def check_hsaco(func_name, constexprs=None):
     constexprs = OrderedDict(constexprs or {})
     hsaco_name = get_default_func_name(func_name, tuple(constexprs.values()))
-    return os.path.exists(f"{BUILD_DIR}/{GPU_ARCH}/{hsaco_name}.hsaco")
+    return os.path.exists(f"{BUILD_DIR}/{get_hsaco_arch()}/{hsaco_name}.hsaco")
+
+
+def get_hsaco_launcher(hsaco_name, kernel_name):
+    path = f"{BUILD_DIR}/{get_hsaco_arch()}/{hsaco_name}.hsaco"
+    return _load_hsaco_launcher(path, kernel_name)
 
 
 @cache
-def get_hsaco_launcher(hsaco_name, kernel_name):
+def _load_hsaco_launcher(path, kernel_name):
     from csrc.cpp_itfs.hsaco_launcher import HsacoLauncher, read_hsaco
 
-    hsaco = read_hsaco(f"{BUILD_DIR}/{GPU_ARCH}/{hsaco_name}.hsaco")
+    hsaco = read_hsaco(path)
     hsaco_launcher = HsacoLauncher()
     hsaco_launcher.load_module(hsaco)
     hsaco_launcher.get_function(kernel_name)
@@ -536,7 +615,7 @@ def run_hsaco(
 ):
     constexprs = OrderedDict(constexprs or {})
     hsaco_name = get_default_func_name(func_name, tuple(constexprs.values()))
-    metadata_path = f"{BUILD_DIR}/{GPU_ARCH}/{hsaco_name}.json"
+    metadata_path = f"{BUILD_DIR}/{get_hsaco_arch()}/{hsaco_name}.json"
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
     with open(metadata_path, "r") as f:

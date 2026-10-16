@@ -15,7 +15,14 @@ from pathlib import Path
 import flydsl.expr as fx
 import torch
 
-from aiter.aot.flydsl.common import compile_only_env, override_env, run_jobs_parallel
+from aiter.aot.flydsl.common import (
+    OpKind,
+    compile_only_env,
+    override_env,
+    resolve_aot_targets,
+    run_jobs_parallel,
+    select_aot_jobs,
+)
 from aiter.ops.flydsl.kernels.mega_moe.mega_moe_config import (
     build_mega_moe_bundle_plan,
 )
@@ -561,7 +568,11 @@ def main():
         choices=DEFAULT_QUANTS,
         default=list(DEFAULT_QUANTS),
     )
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_aot_targets(args.build_targets)
     default_shape = (
         list(args.experts_per_rank) == list(DEFAULT_EXPERTS_PER_RANKS)
         and args.topk == TOPK
@@ -590,6 +601,7 @@ def main():
             situ_beta=args.situ_beta,
             situ_linear_beta=args.situ_linear_beta,
         )
+    jobs = select_aot_jobs(OpKind.MEGA_MOE, jobs, targets)
     results = run_jobs_parallel(compile_one_config, jobs)
     failed = sum(result["compile_time"] is None for result in results)
     print(f"Compiled: {len(results) - failed} ok, {failed} failed")

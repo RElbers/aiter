@@ -110,6 +110,9 @@ cd aiter
 python3 setup.py develop
 ```
 
+For package and module prebuilds with multiple CU variants and cross-compilation,
+see [Explicit GPU build targets](docs/build_targets.md).
+
 If you happen to forget the `--recursive` during `clone`, you can use the following command after `cd aiter`
 ```bash
 git submodule sync && git submodule update --init --recursive

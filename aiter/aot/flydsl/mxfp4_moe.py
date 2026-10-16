@@ -21,7 +21,14 @@ import sys
 import time
 from contextlib import nullcontext
 
-from aiter.aot.flydsl.common import collect_aot_jobs, compile_only_env, override_env
+from aiter.aot.flydsl.common import (
+    OpKind,
+    collect_aot_jobs,
+    compile_only_env,
+    override_env,
+    resolve_aot_targets,
+    select_aot_jobs,
+)
 from aiter.jit.core import AITER_CONFIGS, AITER_ROOT_DIR
 
 _MODEL_CONFIG_DIR = f"{AITER_ROOT_DIR}/aiter/configs/model_configs"
@@ -535,7 +542,11 @@ def main():
         help="Path(s) to tuned FMoE CSVs; default: fp4, fp8fp4, a4w4, and a8w4 "
         "model configs plus the active merged FMoE config",
     )
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_aot_targets(args.build_targets)
 
     csv_paths = [os.path.abspath(p) for p in args.csv]
     for csv_path in csv_paths:
@@ -547,6 +558,7 @@ def main():
         sys.exit(1)
 
     all_jobs = collect_aot_jobs(csv_paths, parse_csv)
+    all_jobs = select_aot_jobs(OpKind.MXFP4_MOE, all_jobs, targets)
     stage1_jobs = [j for j in all_jobs if j["stage"] == 1]
     stage2_jobs = [j for j in all_jobs if j["stage"] == 2]
 

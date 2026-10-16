@@ -8,6 +8,7 @@ import logging
 import multiprocessing
 import os
 import re
+import shlex
 import shutil
 import sys
 import time
@@ -21,7 +22,12 @@ from packaging.version import Version, parse
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, f"{this_dir}/utils/")
-from chip_info import _detect_native, get_gfx, get_gfx_list, get_gfx_runtime
+from chip_info import (
+    _detect_native,
+    get_gfx,
+    get_gfx_list,  # noqa: F401 - initialized by aiter's runtime import
+    get_gfx_runtime,
+)
 from cpp_extension import _jit_compile, executable_path, get_hip_version
 from file_baton import FileBaton
 from jit_cache import (
@@ -726,7 +732,6 @@ if not os.path.exists(os.path.join(AITER_META_DIR, "csrc")):
 sys.path.insert(0, AITER_META_DIR)
 AITER_CSRC_DIR = f"{AITER_META_DIR}/csrc"
 AITER_GRADLIB_DIR = f"{AITER_META_DIR}/gradlib"
-gfxs = get_gfx_list()
 AITER_ASM_DIR = f"{AITER_META_DIR}/hsa/"
 os.environ["AITER_ASM_DIR"] = AITER_ASM_DIR
 # Pre-compiled opus code objects (csrc/opus_gemm/gen_co/<arch>/<symbol>.co).
@@ -1277,7 +1282,22 @@ def build_module(
     hipify=False,
     flags_extra_hip_per_source=None,
     build_after_wait=False,
+    build_targets=None,
 ):
+    if build_targets is not None:
+        from build_targets import format_build_targets, resolve_build_targets
+
+        build_targets = resolve_build_targets(build_targets)
+        if build_targets is None:
+            raise ValueError(
+                "Pass None, rather than a blank request, for a legacy runtime build"
+            )
+        logger.info(
+            "Explicit build of %s for %s", md_name, format_build_targets(build_targets)
+        )
+        blob_gen_cmd = _target_codegen_commands(blob_gen_cmd, build_targets)
+        build_after_wait = True
+
     os.makedirs(bd_dir, exist_ok=True)
     lock_path = f"{bd_dir}/lock_{md_name}"
     startTS = time.perf_counter()
@@ -1358,18 +1378,30 @@ def build_module(
             ]
         if hip_version > Version("6.2.41133"):
             flags_hip += ["-mllvm -amdgpu-coerce-illegal-types=1"]
-        if get_gfx() != "gfx942" and int(os.getenv("AITER_FP4x2", "1")) > 0:
+        archs = (
+            sorted({gfx for gfx, _ in build_targets})
+            if build_targets is not None
+            else validate_and_update_archs()
+        )
+        needs_fp4 = (
+            any(gfx != "gfx942" for gfx in archs)
+            if build_targets is not None
+            else get_gfx() != "gfx942"
+        )
+        if needs_fp4 and int(os.getenv("AITER_FP4x2", "1")) > 0:
             flags_hip += ["-D__Float4_e2m1fn_x2"]
         # Cluster launch is a HOST-side API question (hipDrvLaunchKernelEx +
         # HIP_LAUNCH_CONFIG appear in ROCm 7.0), not a question about which GPU
         # this machine has -- so the arch test must accept a cross-compile for
         # gfx1250 the way the gfx1250 flags in optCompilerConfig.json already do.
-        # get_gfx() alone reads the LAST entry of a multi-arch GPU_ARCHS, which
-        # left "gfx1250;gfx942" building gfx1250 kernels whose cluster launch
-        # path was compiled out (AiterAsmKernelFast then rejects them at launch).
-        if (
-            get_gfx() == "gfx1250" or "gfx1250" in os.environ.get("GPU_ARCHS", "")
-        ) and hip_version >= Version("7.0.0"):
+        # Explicit requests use destination architectures; legacy builds retain
+        # their GPU_ARCHS-aware feature checks.
+        needs_cluster_launch = (
+            "gfx1250" in archs
+            if build_targets is not None
+            else get_gfx() == "gfx1250" or "gfx1250" in os.environ.get("GPU_ARCHS", "")
+        )
+        if needs_cluster_launch and hip_version >= Version("7.0.0"):
             flags_hip += ["-DAITER_ENABLE_CLUSTER_LAUNCH"]
 
         if not torch_exclude:
@@ -1403,7 +1435,6 @@ def build_module(
 
         flags_cc += flags_extra_cc
         flags_hip += flags_extra_hip
-        archs = validate_and_update_archs()
         flags_hip += [f"--offload-arch={arch}" for arch in archs]
         flags_hip = sorted(set(flags_hip))  # remove same flags
         flags_hip = [el for el in flags_hip if hip_flag_checker(el)]
@@ -1642,7 +1673,58 @@ def _get_ck_exclude_modules():
     return ck_modules
 
 
-def get_args_of_build(ops_name: str, exclude=None):
+def _target_codegen_commands(commands, targets):
+    """Adapt only generators that consume destinations; others are target-neutral."""
+    from build_targets import ck_tile_target_families, format_build_targets
+
+    if isinstance(commands, list):
+        return [_target_codegen_commands(cmd, targets) for cmd in commands]
+    if not commands:
+        return commands
+    executable = shlex.split(commands)[0]
+    name = os.path.basename(executable)
+    parent = os.path.basename(os.path.dirname(executable))
+    if (
+        name.startswith("gen_instances")
+        and parent
+        in {
+            "ck_gemm_a8w8",
+            "ck_batched_gemm_a8w8",
+            "ck_batched_gemm_bf16",
+            "ck_deepgemm",
+            "ck_gemm_a4w4_blockscale",
+            "ck_gemm_a8w8_blockscale",
+            "ck_gemm_a8w8_blockscale_bpreshuffle",
+            "ck_gemm_a8w8_bpreshuffle",
+            "cktile_gemm_a8w8_bpreshuffle",
+            "ck_gemm_moe_2stages_codegen",
+            "ck_tile_gemm_moe_2stages",
+            "opus_gemm",
+        }
+    ) or (name == "codegen.py" and parent == "hsa"):
+        return (
+            commands + " --build-targets " + shlex.quote(format_build_targets(targets))
+        )
+    if name == "generate.py" and parent == "01_fmha":
+        return commands + " --targets " + ck_tile_target_families(targets)
+    return commands
+
+
+def get_args_of_build(ops_name: str, exclude=None, *, build_targets=None):
+    if build_targets is not None:
+        from build_targets import resolve_build_targets
+
+        build_targets = resolve_build_targets(build_targets)
+        if build_targets is None:
+            raise ValueError(
+                "An explicit build request must contain at least one target"
+            )
+
+    def build_for_arch(arch):
+        if build_targets is not None:
+            return any(gfx == arch for gfx, _ in build_targets)
+        return get_gfx() == arch or arch in os.environ.get("GPU_ARCHS", "")
+
     if exclude is None:
         exclude = []
     d_opt_build_args = {
@@ -1683,16 +1765,22 @@ def get_args_of_build(ops_name: str, exclude=None):
                             # torch.utils.cmake_prefix_path). Static analysis
                             # cannot see that use, hence the noqa.
                             import torch  # noqa: F401
-                        val[idx] = eval(el)
+                        val[idx] = eval(
+                            el, globals(), dict(locals(), build_for_arch=build_for_arch)
+                        )
                 d_ops[k] = val
             elif isinstance(val, str):
-                d_ops[k] = eval(val)
+                d_ops[k] = eval(
+                    val, globals(), dict(locals(), build_for_arch=build_for_arch)
+                )
             else:
                 pass
 
         # Use a fresh copy so keys from previous modules don't leak
         result = dict(d_opt_build_args)
         result.update(d_ops)
+        if build_targets is not None:
+            result["build_targets"] = build_targets
         return result
 
     with open(this_dir + "/optCompilerConfig.json", "r") as file:
@@ -1738,7 +1826,12 @@ def get_args_of_build(ops_name: str, exclude=None):
                         "blob_gen_cmd": single_ops["blob_gen_cmd"],
                         "third_party": single_ops["third_party"],
                         "torch_exclude": single_ops["torch_exclude"],
+                        "flags_extra_hip_per_source": single_ops[
+                            "flags_extra_hip_per_source"
+                        ],
                     }
+                    if build_targets is not None:
+                        d_single_ops["build_targets"] = build_targets
                     for (  # noqa: PLC0206  loop mutates d_all_ops[k] by key while reading single_ops[k]; .items() does not help
                         k
                     ) in d_all_ops:

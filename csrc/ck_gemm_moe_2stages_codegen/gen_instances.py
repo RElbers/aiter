@@ -862,6 +862,7 @@ class ck_moe_2stage_gemm_codegen:
         mul_routed_weight_stage,
         preshuffle,
         splitk,
+        targets=None,
     ):
         self.working_path = working_path
         self.a_dtype = a_dtype.upper()
@@ -873,8 +874,14 @@ class ck_moe_2stage_gemm_codegen:
         self.nswizzle = False
         self.preshuffle = preshuffle
         self.splitk = splitk
+        self.targets = targets
 
     def generate_instance_and_lookUpTable(self):
+        archs = sorted({gfx for gfx, _ in self.targets}) if self.targets else [None]
+        for arch in archs:
+            self._generate_for_arch(arch)
+
+    def _generate_for_arch(self, arch):
         _, gemm1_kernel_list = get_gemm1_kernels_list(
             self.a_dtype,
             self.b_dtype,
@@ -885,6 +892,7 @@ class ck_moe_2stage_gemm_codegen:
             self.mul_routed_weight_stage == 1,
             self.preshuffle,
             self.splitk,
+            arch=arch,
         )
         tag, gemm2_kernel_list = get_gemm2_kernels_list(
             self.a_dtype,
@@ -894,6 +902,7 @@ class ck_moe_2stage_gemm_codegen:
             self.quant_type,
             self.mul_routed_weight_stage == 2,
             self.preshuffle,
+            arch=arch,
         )
         kernel_list = list(gemm1_kernel_list.values()) + list(
             gemm2_kernel_list.values()
@@ -999,6 +1008,14 @@ class ck_moe_2stage_gemm_codegen:
                 MulRoutedWeight=str(self.mul_routed_weight_stage == 1).lower(),
                 Preshuffle=str(self.preshuffle).lower(),
             )
+            if arch is not None:
+                gemm1_heuristic_dispatch_str = (
+                    'if (get_gpu_arch() == "'
+                    + arch
+                    + '") {{\n'
+                    + gemm1_heuristic_dispatch_str
+                    + "\n}}\n"
+                )
             f_h.write(gemm1_heuristic_dispatch_str)
 
         f_gemm2_heuristic_dispatch = os.path.join(
@@ -1017,6 +1034,14 @@ class ck_moe_2stage_gemm_codegen:
                 MulRoutedWeight=str(self.mul_routed_weight_stage == 2).lower(),
                 Preshuffle=str(self.preshuffle).lower(),
             )
+            if arch is not None:
+                gemm2_heuristic_dispatch_str = (
+                    'if (get_gpu_arch() == "'
+                    + arch
+                    + '") {{\n'
+                    + gemm2_heuristic_dispatch_str
+                    + "\n}}\n"
+                )
             f_h.write(gemm2_heuristic_dispatch_str)
 
 
@@ -1112,7 +1137,13 @@ if __name__ == "__main__":
         help="enable moe_stage1 splitk mode",
     )
 
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    from build_targets import resolve_build_targets
+
+    targets = resolve_build_targets(args.build_targets)
     args.quant_type = (
         "per_1x128" if args.quant_type == "per_128x128" else args.quant_type
     )
@@ -1163,6 +1194,7 @@ if __name__ == "__main__":
                 routed_weight,
                 preshuffle_mode,
                 False,  # splitk
+                targets=targets,
             )
             codegen.generate_instance_and_lookUpTable()
 
@@ -1182,6 +1214,7 @@ if __name__ == "__main__":
                 routed_weight,
                 preshuffle_mode,
                 splitk,
+                targets=targets,
             )
             codegen.generate_instance_and_lookUpTable()
 
@@ -1207,6 +1240,7 @@ if __name__ == "__main__":
                 routed_weight,
                 preshuffle_mode,
                 False,  # splitk
+                targets=targets,
             )
             codegen.generate_instance_and_lookUpTable()
 
@@ -1244,6 +1278,7 @@ if __name__ == "__main__":
                 routed_weight,
                 True,  # preshuffle (plain f8 forced True, mirrors general loop)
                 False,  # splitk
+                targets=targets,
             )
             codegen.generate_instance_and_lookUpTable()
 
@@ -1279,6 +1314,7 @@ if __name__ == "__main__":
                 routed_weight,
                 True,  # preshuffle (plain f8 forced True, mirrors general loop)
                 False,  # splitk
+                targets=targets,
             )
             codegen.generate_instance_and_lookUpTable()
     else:
@@ -1294,6 +1330,7 @@ if __name__ == "__main__":
                 args.mul_routed_weight_stage,
                 args.preshuffle,
                 args.issplitk,
+                targets=targets,
             )
             codegen.generate_instance_and_lookUpTable()
 
