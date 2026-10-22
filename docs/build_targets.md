@@ -7,8 +7,9 @@ launch geometry, and an operation's cold JIT build ignore this variable.
 
 The shared request APIs are available while backend adapters are introduced.
 Explicit native builds reject module recipes whose adapters are not available
-in this revision. Legacy builds retain their existing behavior. Full-package
-explicit builds are not enabled yet; use selected native modules when supported.
+in this revision. Builds without explicit targets retain their existing behavior.
+Full-package explicit builds are not enabled yet; use selected native modules
+when supported.
 
 ## Input and compatibility
 
@@ -16,13 +17,16 @@ The syntax is semicolon-separated `gfx:positive_cu_count` pairs. Architecture
 names are validated against `GFX_CU_NUM_MAP` in `aiter/jit/utils/build_targets.py`,
 including gfx942, gfx950, gfx1250 and the listed Radeon architectures. Names and
 whitespace are normalized, duplicates removed, and order canonicalized. Parser
-acceptance does not extend any backend's hardware support. Bare architectures, `native`,
-wildcards, and comma-separated pairs are not part of the new syntax. Unset or blank retains legacy behavior.
+acceptance does not extend any backend's hardware support. Bare architectures,
+`native`, wildcards, and comma-separated pairs are not part of the new syntax.
+Unset or blank keeps the existing `GPU_ARCHS`/`CU_NUM` and hardware-detection
+behavior.
 
-Existing `GPU_ARCHS` and `CU_NUM` retain their syntax and behavior. When supplied
-alongside explicit pairs, their architecture set and scalar CU count must agree
-with the request. Otherwise the entry point reports a conflict without changing
-the caller's environment. Leave `CU_NUM` unset when requesting different counts.
+`GPU_ARCHS` and `CU_NUM` remain supported configuration inputs with their existing
+syntax and behavior. When supplied alongside explicit pairs, their architecture
+set and scalar CU count must agree with the request. Otherwise the entry point
+reports a conflict without changing the caller's environment. Leave `CU_NUM`
+unset when requesting different counts.
 
 Each instruction-set architecture appears once in the compiler flags. CU count
 selects tuning rows or compile-time specialization only where the backend uses

@@ -1299,7 +1299,10 @@ def build_module(
     if build_targets is not None:
         build_targets = _resolve_explicit_build_targets(
             build_targets,
-            empty_message="Pass None, rather than a blank request, for a legacy runtime build",
+            empty_message=(
+                "Pass None, rather than a blank request, "
+                "for a build without explicit targets"
+            ),
         )
         _require_explicit_module(md_name)
         logger.info(
