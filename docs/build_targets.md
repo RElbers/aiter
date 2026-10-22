@@ -5,22 +5,36 @@ build. It supports several CU counts of one architecture and mixed architectures
 without using the build host's GPU as a substitute. Runtime hardware detection,
 launch geometry, and an operation's cold JIT build ignore this variable.
 
-The shared request APIs are available while backend adapters are introduced.
-Explicit native builds reject module recipes whose adapters are not available
-in this revision. Legacy builds retain their existing behavior. Full-package
-explicit builds are not enabled yet; use selected native modules when supported.
-
 ```sh
+# One instruction-set target, two tuning variants.
 AITER_BUILD_TARGETS='gfx950:128;gfx950:256' \
   python aiter/jit/prebuild.py module_gemm_a8w8
 
-PREBUILD_KERNELS=1 PREBUILD_MODULES='module_gemm_a8w8' \
+# Cross-compile with no GPU visible.
+HIP_VISIBLE_DEVICES='' ROCR_VISIBLE_DEVICES='' \
+  python aiter/jit/prebuild.py module_gemm_a8w8 \
+  --build-targets 'gfx942:304;gfx950:128'
+
+# Use the existing full package prebuild selection, including FlyDSL AOT.
+PREBUILD_KERNELS=1 AITER_BUILD_TARGETS='gfx942:304;gfx950:128;gfx950:256' \
+  python setup.py bdist_wheel
+
+# Or prebuild selected native modules only.
+PREBUILD_KERNELS=1 PREBUILD_MODULES='module_gemm_a8w8;module_deepgemm_opus' \
   AITER_BUILD_TARGETS='gfx942:304;gfx950:128' python setup.py bdist_wheel
 ```
 
-`PREBUILD_MODULES` selects native modules and skips package-wide FlyDSL AOT.
-Module names come from `aiter/jit/optCompilerConfig.json`. Run live-GPU pretuning
-separately from explicit cross-builds.
+Module names come from `aiter/jit/optCompilerConfig.json`. `PREBUILD_MODULES`
+replaces the usual native module selection and skips package-wide FlyDSL AOT.
+Without it, the existing `PREBUILD_KERNELS` selection and exclusions apply.
+Live-GPU pretuning must run separately from explicit cross-builds. Keep
+`AITER_JIT_DIR` unset for a wheel so native modules land in its normal package
+location; standalone prebuilds can use it to select their output directory.
+
+The CK Tile preshuffled GEMM tuning module can also be cross-built through
+`aiter/jit/prebuild.py` or `PREBUILD_MODULES`. Its candidate tables retain each
+architecture's kernel IDs, and execution selects the table for the current GPU.
+Several CU variants of one architecture share the same candidate table.
 
 ## Input and compatibility
 
@@ -101,9 +115,22 @@ Shared build functions receive immutable pairs and never read
 CLI arguments. Runtime JIT children omit the inherited variable, even when it
 contains an invalid request. Parallel builds keep their requests local.
 
-## Tuning data
+## Tuning data and workflow entry points
 
 Requested CU variants need existing tuning rows. Missing rows warn with the
 target and table/backend while keeping supported fallbacks or runtime JIT.
-Unknown kernel IDs/names in applicable CK rows still fail strictly.
-Target selection never substitutes the build host's GPU.
+Unknown kernel IDs/names in applicable CK rows still fail strictly. A missing
+embedded object is a separate error; neither case changes the destination to
+the build host's GPU.
+
+The release, nightly and release-automation workflows accept pairs in their
+existing `gpu_archs` **workflow input**, for example `gfx950:128;gfx950:256`.
+A build step translates this into architecture-only `GPU_ARCHS` and explicit
+`AITER_BUILD_TARGETS`, forwards both into the build container, and records them
+in the summary. Legacy architecture-only workflow inputs remain unchanged. This
+keeps the release workflow within the ten `workflow_dispatch` input limit; it
+does not extend the syntax of the `GPU_ARCHS` environment variable.
+
+When the workflow builds an older revision without explicit-target support,
+architecture-only inputs still work. Explicit pairs are rejected with an
+unsupported-revision error rather than silently losing the requested CU variants.

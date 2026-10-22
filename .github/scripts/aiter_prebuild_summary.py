@@ -56,6 +56,7 @@ def main() -> int:
 
     print("=== Aiter prebuild summary ===")
     print(f"Runner: {os.environ.get('AITER_RUNNER_NAME', 'unknown')}")
+    print(f"AITER_BUILD_TARGETS: {os.environ.get('AITER_BUILD_TARGETS') or '(legacy)'}")
     print(f"GPU_ARCHS: {os.environ.get('GPU_ARCHS', 'unknown')}")
     print(f"PREBUILD_KERNELS: {os.environ.get('PREBUILD_KERNELS', 'unknown')}")
     print(f"AITER_MAX_JOBS: {os.environ.get('AITER_MAX_JOBS', 'unknown')}")
