@@ -67,6 +67,7 @@ removed from the artifact.
 | Assembly manifest codegen | Select the requested architecture entries. Existing object availability and runtime guards still apply. |
 | FlyDSL AOT | Package and all AOT CLIs use the same job selector. GEMM, convolution and MoE use job metadata; chunk GDN honors explicit gfx and expands portable jobs. Persistent MXFP4 retains CU specialization. Fixed gfx950 families keep their actual compiler target. |
 | Generic template HIP libraries | The explicit Python API supports multi-architecture compilation, with compatible cache lookup shared by Python and C++. CU count adds no cache dimension to these libraries. |
+| Embedded MLA template | Select a separate destination object and library per architecture; missing objects identify the destination and path. See the existing limitation below. |
 
 FlyDSL CLI example (requires the FlyDSL version pinned by this checkout):
 
@@ -87,6 +88,14 @@ existing AOT implementation covers auxiliary kernels. Mega MoE retains its fixed
 gfx950/256-CU compilation constants. Unsupported batched FlyDSL kernel families
 still emit the existing missing-AOT-wiring warning. These constraints also apply
 when a package requests additional variants.
+
+The current embedded MLA template has a preexisting reduction ABI mismatch with
+`aiter/mla.py`; its older call signature does not match the current Triton kernel.
+Target selection does not repair that operator. Its Triton stub generator also
+requires an active HIP driver even with an explicit compiler target. The generic
+HIP template path supports GPU-less cross-compilation independently of this
+operator-specific limitation. The gfx1250 MLA stage-one objects used by this
+legacy template are absent and produce a concrete missing-object error.
 
 ## Programmatic boundary and template cache
 
