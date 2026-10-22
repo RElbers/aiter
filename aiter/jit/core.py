@@ -1695,6 +1695,7 @@ _EXPLICIT_BUILD_MODULES = frozenset(
         "module_batched_gemm_bf16",
         "module_batched_gemm_bf16_tune",
         "module_deepgemm",
+        "module_deepgemm_opus",
         "module_gemm_a4w4_blockscale",
         "module_gemm_a4w4_blockscale_tune",
         "module_gemm_a8w8",
@@ -1716,6 +1717,7 @@ _EXPLICIT_BUILD_MODULES = frozenset(
         "module_mha_varlen_fwd",
         "module_moe_ck2stages",
         "module_moe_cktile2stages",
+        "module_pa_mqa_logits_mxfp4_opus",
     ]
 )
 _EXPLICIT_BUILD_PREFIXES = ("module_moe_ck2stages_", "mha_varlen_fwd_")
@@ -1751,6 +1753,7 @@ def _target_codegen_commands(commands, targets):
         "cktile_gemm_a8w8_bpreshuffle",
         "ck_gemm_moe_2stages_codegen",
         "ck_tile_gemm_moe_2stages",
+        "opus_gemm",
     }:
         return (
             commands + " --build-targets " + shlex.quote(format_build_targets(targets))
