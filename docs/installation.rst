@@ -76,7 +76,7 @@ Environment Variables
      - Description
      - Default
    * - ``GPU_ARCHS``
-     - Target GPU architecture(s), semicolon-separated. Use ``native`` to auto-detect.
+     - Target GPU architecture(s), separated by ``;`` or ``,``. Use ``native`` to auto-detect.
      - ``native``
    * - ``AITER_BUILD_TARGETS``
      - Build targets as ``gfx:cu_num``, separated by ``;`` or ``,``. Overrides ``GPU_ARCHS``, and is used instead of ``CU_NUM`` for the build. Needed only for SKUs of one architecture that differ in CU count. Also read at runtime: aiter dispatches for the live GPU's arch when it is a target, and otherwise for one of the targets.
