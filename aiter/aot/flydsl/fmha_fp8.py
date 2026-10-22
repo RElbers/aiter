@@ -25,10 +25,13 @@ import sys
 import time
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     compile_only_env,
     dedupe_jobs,
     override_env,
+    resolve_aot_targets,
     run_jobs_parallel,
+    select_aot_jobs,
 )
 
 AOT_ARCH = "gfx950"
@@ -280,7 +283,11 @@ def main():
         help="H:Hkv:D:Dv[@layout], repeatable; replaces DEFAULT_SHAPES",
     )
     parser.add_argument("--list", action="store_true", help="print the jobs and exit")
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_aot_targets(args.build_targets)
     if args.shape:
         jobs = []
         for spec in args.shape:
@@ -293,6 +300,7 @@ def main():
         jobs = dedupe_jobs(jobs)
     else:
         jobs = default_jobs()
+    jobs = select_aot_jobs(OpKind.FMHA_FP8, jobs, targets)
     if args.list:
         for job in jobs:
             print(job["kernel_name"])

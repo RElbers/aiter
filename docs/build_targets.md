@@ -50,6 +50,27 @@ removed from the artifact.
 | CK Tile MXFP4 MoE | Include its existing gfx950 implementation when requested. This does not add a gfx942 or gfx1250 implementation. |
 | OPUS | Filter by architecture ownership, retaining the mandatory/default compiled kernels and applicable tuned kernels. CU pruning is deliberately not applied. Per-source compiler options survive package prebuilds. |
 | CK Tile attention recipes | Pass the destination families to the upstream generator, including its `gfx9` name for gfx942. |
+| FlyDSL AOT | Package and all AOT CLIs use the same job selector. GEMM, convolution and MoE use job metadata; chunk GDN honors explicit gfx and expands portable jobs. Persistent MXFP4 retains CU specialization. Fixed gfx950 families keep their actual compiler target. |
+
+FlyDSL CLI example (requires the FlyDSL version pinned by this checkout):
+
+```sh
+AITER_AOT_IMPORT=1 python -m aiter.aot.flydsl.gemm \
+  --build-targets 'gfx950:128;gfx950:256' --csv /path/to/tuned.csv
+```
+
+Legacy FlyDSL `ARCH`/`GPU_ARCHS` filtering now applies consistently to package
+builds and CLIs. `native` is resolved once to the detected architecture before
+selection, fixing the previous literal-string filter. The compiler still uses
+the job's destination, including the legacy CU-to-architecture fallback for old
+rows without gfx metadata. MoE workers clear cached CU answers both when entering
+and when leaving a compilation override.
+
+AOT selection does not add missing algorithms or configurations. Grouped MoE's
+existing AOT implementation covers auxiliary kernels. Mega MoE retains its fixed
+gfx950/256-CU compilation constants. Unsupported batched FlyDSL kernel families
+still emit the existing missing-AOT-wiring warning. These constraints also apply
+when a package requests additional variants.
 
 ## Programmatic boundary
 
