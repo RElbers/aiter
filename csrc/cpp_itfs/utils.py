@@ -95,17 +95,6 @@ AITER_PYTHON_ROOT_DIR = (
 )
 sys.path.insert(0, os.path.join(AITER_PYTHON_ROOT_DIR, "aiter", "jit", "utils"))
 
-from chip_info import get_gfx_runtime
-
-
-@cache
-def get_gpu_arch():
-    gpu_arch = os.environ.get("GPU_ARCHS")
-    if gpu_arch is None:
-        gpu_arch = get_gfx_runtime()
-    return gpu_arch
-
-
 AITER_REBUILD = int(os.environ.get("AITER_REBUILD", "0"))
 
 HOME_PATH = (
@@ -562,8 +551,7 @@ def compile_hsaco(
     constexprs=None,
     extra_metadata=None,
 ):
-    if gcnArchName is None:
-        gcnArchName = get_gpu_arch()
+    gcnArchName = gcnArchName or get_hsaco_arch()
     build_dir = f"{BUILD_DIR}/{gcnArchName}"
     constexprs = OrderedDict(constexprs or {})
     func_name = get_default_func_name(kernel_name, tuple(constexprs.values()))
@@ -592,17 +580,31 @@ def compile_hsaco(
     mp_lock(lock_path=lock_path, main_func=main_func, final_func=final_func)
 
 
+def get_hsaco_arch():
+    archs = validate_and_update_archs()
+    if len(archs) != 1:
+        raise ValueError(
+            "An embedded code object requires one destination architecture"
+        )
+    return archs[0]
+
+
 def check_hsaco(func_name, constexprs=None):
     constexprs = OrderedDict(constexprs or {})
     hsaco_name = get_default_func_name(func_name, tuple(constexprs.values()))
-    return os.path.exists(f"{BUILD_DIR}/{get_gpu_arch()}/{hsaco_name}.hsaco")
+    return os.path.exists(f"{BUILD_DIR}/{get_hsaco_arch()}/{hsaco_name}.hsaco")
+
+
+def get_hsaco_launcher(hsaco_name, kernel_name):
+    path = f"{BUILD_DIR}/{get_hsaco_arch()}/{hsaco_name}.hsaco"
+    return _load_hsaco_launcher(path, kernel_name)
 
 
 @cache
-def get_hsaco_launcher(hsaco_name, kernel_name):
+def _load_hsaco_launcher(path, kernel_name):
     from csrc.cpp_itfs.hsaco_launcher import HsacoLauncher, read_hsaco
 
-    hsaco = read_hsaco(f"{BUILD_DIR}/{get_gpu_arch()}/{hsaco_name}.hsaco")
+    hsaco = read_hsaco(path)
     hsaco_launcher = HsacoLauncher()
     hsaco_launcher.load_module(hsaco)
     hsaco_launcher.get_function(kernel_name)
@@ -614,7 +616,7 @@ def run_hsaco(
 ):
     constexprs = OrderedDict(constexprs or {})
     hsaco_name = get_default_func_name(func_name, tuple(constexprs.values()))
-    metadata_path = f"{BUILD_DIR}/{get_gpu_arch()}/{hsaco_name}.json"
+    metadata_path = f"{BUILD_DIR}/{get_hsaco_arch()}/{hsaco_name}.json"
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
     with open(metadata_path, "r") as f:
