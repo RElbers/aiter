@@ -1690,17 +1690,36 @@ _EXPLICIT_BUILD_MODULES = frozenset(
         "libmha_bwd",
         "libmha_fwd",
         "mha_varlen_fwd",
+        "module_attention_asm",
+        "module_attention_ps_reduce_asm",
         "module_batched_gemm_a8w8",
         "module_batched_gemm_a8w8_tune",
         "module_batched_gemm_bf16",
         "module_batched_gemm_bf16_tune",
         "module_deepgemm",
         "module_deepgemm_opus",
+        "module_f4gemm_asm",
+        "module_fmha_fwd_mxfp8_asm",
+        "module_fmha_fwd_with_sink_asm",
+        "module_fmha_fwd_with_sink_varlen_asm",
+        "module_fmha_v3_bwd",
+        "module_fmha_v3_fwd",
+        "module_fmha_v3_varlen_bwd",
+        "module_fmha_v3_varlen_fwd",
+        "module_fmha_v4_fwd",
+        "module_gemm_a16w16_asm",
+        "module_gemm_a16w8_asm",
+        "module_gemm_a4w4_asm",
         "module_gemm_a4w4_blockscale",
         "module_gemm_a4w4_blockscale_tune",
+        "module_gemm_a4w6_asm",
+        "module_gemm_a6w4_asm",
+        "module_gemm_a6w6_asm",
         "module_gemm_a8w8",
+        "module_gemm_a8w8_asm",
         "module_gemm_a8w8_blockscale",
         "module_gemm_a8w8_blockscale_bpreshuffle",
+        "module_gemm_a8w8_blockscale_bpreshuffle_asm",
         "module_gemm_a8w8_blockscale_bpreshuffle_cktile",
         "module_gemm_a8w8_blockscale_bpreshuffle_cktile_tune",
         "module_gemm_a8w8_blockscale_bpreshuffle_tune",
@@ -1713,10 +1732,18 @@ _EXPLICIT_BUILD_MODULES = frozenset(
         "module_gemm_a8w8_bpreshuffle_tune",
         "module_gemm_a8w8_tune",
         "module_mha_batch_prefill",
+        "module_mha_bwd",
         "module_mha_fwd",
+        "module_mha_varlen_bwd",
         "module_mha_varlen_fwd",
+        "module_mla_asm",
+        "module_mla_sparse_prefill_asm",
         "module_moe_ck2stages",
         "module_moe_cktile2stages",
+        "module_moe_fmoe_asm",
+        "module_moe_topksoftmax_asm",
+        "module_mxfp8fp4gemm_asm",
+        "module_pa_decode_bf16_asm",
         "module_pa_mqa_logits_mxfp4_opus",
     ]
 )
@@ -1741,20 +1768,24 @@ def _target_codegen_commands(commands, targets):
     executable = shlex.split(commands)[0]
     name = os.path.basename(executable)
     parent = os.path.basename(os.path.dirname(executable))
-    if name.startswith("gen_instances") and parent in {
-        "ck_gemm_a8w8",
-        "ck_batched_gemm_a8w8",
-        "ck_batched_gemm_bf16",
-        "ck_deepgemm",
-        "ck_gemm_a4w4_blockscale",
-        "ck_gemm_a8w8_blockscale",
-        "ck_gemm_a8w8_blockscale_bpreshuffle",
-        "ck_gemm_a8w8_bpreshuffle",
-        "cktile_gemm_a8w8_bpreshuffle",
-        "ck_gemm_moe_2stages_codegen",
-        "ck_tile_gemm_moe_2stages",
-        "opus_gemm",
-    }:
+    if (
+        name.startswith("gen_instances")
+        and parent
+        in {
+            "ck_gemm_a8w8",
+            "ck_batched_gemm_a8w8",
+            "ck_batched_gemm_bf16",
+            "ck_deepgemm",
+            "ck_gemm_a4w4_blockscale",
+            "ck_gemm_a8w8_blockscale",
+            "ck_gemm_a8w8_blockscale_bpreshuffle",
+            "ck_gemm_a8w8_bpreshuffle",
+            "cktile_gemm_a8w8_bpreshuffle",
+            "ck_gemm_moe_2stages_codegen",
+            "ck_tile_gemm_moe_2stages",
+            "opus_gemm",
+        }
+    ) or (name == "codegen.py" and parent == "hsa"):
         return (
             commands + " --build-targets " + shlex.quote(format_build_targets(targets))
         )
