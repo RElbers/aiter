@@ -9,6 +9,7 @@ import enum
 import json
 import multiprocessing
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -50,16 +51,82 @@ class JobLabel:
         return f"{self.kind.name} {self.kernel_name}"
 
 
-_CU_NUM_TO_ARCH = {
-    80: "gfx942",
-    304: "gfx942",
-    256: "gfx950",
-}
-
-
 def cu_num_to_arch(cu_num: int, default: str = "gfx950") -> str:
     """Map compute-unit count to GPU architecture string."""
-    return _CU_NUM_TO_ARCH.get(cu_num, default)
+    from aiter.jit.utils.chip_info import _LEGACY_CU_NUM_TO_GFX
+
+    return _LEGACY_CU_NUM_TO_GFX.get(cu_num, default)
+
+
+def requested_archs(arch_env: str | None = None) -> set[str] | None:
+    """Arch names to AOT-compile for, or None to compile every arch.
+
+    The build targets as aiter/jit/core.py resolves them: AITER_BUILD_TARGETS,
+    then GPU_ARCHS, then the live GPU. arch_env, which only the per-module
+    CLIs pass (see cli_requested_archs), stands in for GPU_ARCHS when given.
+    """
+    from aiter.jit.utils.build_targets import (
+        _parse_gpu_archs_env,
+        check_known_gfx,
+        get_build_archs_env,
+    )
+    from aiter.jit.utils.chip_info import get_gfx_list, get_gfx_runtime
+
+    archs = get_build_archs_env()
+    if archs is None and arch_env:
+        archs = _parse_gpu_archs_env(arch_env, name="ARCH")
+        if archs != ["native"]:
+            check_known_gfx(archs, name="ARCH")
+        if archs == ["native"]:
+            try:
+                archs = [get_gfx_runtime()]
+            except Exception:  # noqa: BLE001
+                return None
+    if archs is None:
+        archs = [a for a in get_gfx_list() if a != "cpu"]
+    return set(archs) or None
+
+
+def cli_requested_archs() -> set[str] | None:
+    """requested_archs() for the per-module CLIs, which also honor ARCH.
+
+    ARCH is a generic name other build tools set (conda-build exports ARCH=64),
+    so setup.py's run_aot never reads it, and a value naming no gfx arch is
+    ignored here rather than rejected.
+    """
+    arch_env = os.environ.get("ARCH", "").strip()
+    entries = [e.strip().lower() for e in re.split(r"[;,]", arch_env) if e.strip()]
+    if entries and not any(e == "native" or e.startswith("gfx") for e in entries):
+        print(f"[aiter] ignoring ARCH={arch_env!r}: it names no gfx arch")
+        arch_env = ""
+    return requested_archs(arch_env or None)
+
+
+def job_arch(kind: OpKind, cu_num: int = 0, gfx: str = "") -> str:
+    if kind in (OpKind.MXFP4_MOE, OpKind.MEGA_MOE, OpKind.FMHA_FP8):
+        return "gfx950"
+    if kind is OpKind.GROUPED_MOE:
+        return gfx or "gfx1250"
+    if kind in (OpKind.GEMM, OpKind.CONV, OpKind.MOE, OpKind.CHUNK_GDN_H):
+        return gfx or cu_num_to_arch(cu_num)
+
+    raise ValueError(f"unknown FlyDSL AOT kind: {kind!r}")
+
+
+def select_target_jobs(
+    kind: OpKind, jobs: list[dict[str, Any]], archs: set[str] | None
+) -> list[dict[str, Any]]:
+    """The jobs whose arch is in archs; all of them when archs is None."""
+    if archs is None:
+        return jobs
+
+    selected = []
+    for job in jobs:
+        arch = job_arch(kind, job.get("cu_num", 0), job.get("gfx", ""))
+        if arch in archs:
+            selected.append(job)
+
+    return selected
 
 
 def job_identity(job: dict[str, Any]) -> tuple:
@@ -133,7 +200,7 @@ def override_env(var_name: str, value: str | None) -> Iterator[None]:
             os.environ[var_name] = prev
 
 
-def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
+def _collect_aot_jobs_for(kind: OpKind, archs: set[str] | None) -> list[dict[str, Any]]:
     """Load DEFAULT_CSVS + parse_csv for the named kind and return its
     job list. Note: importing .gemm / .moe / .chunk_gdn_h here also
     runs their module-level imports, which pull in FlyDSL (e.g.
@@ -143,11 +210,13 @@ def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
         from .mega_moe import production_jobs
 
         # Ships both V4-Pro and Kimi-K3 so neither JITs online at serving time.
-        return production_jobs()
+        jobs = production_jobs()
+        return select_target_jobs(kind, jobs, archs)
     if kind is OpKind.FMHA_FP8:
         from .fmha_fp8 import default_jobs
 
-        return default_jobs()
+        jobs = default_jobs()
+        return select_target_jobs(kind, jobs, archs)
     if kind is OpKind.MOE:
         from .moe import DEFAULT_CSVS, parse_csv
     elif kind is OpKind.MXFP4_MOE:
@@ -162,7 +231,9 @@ def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
         from .chunk_gdn_h import DEFAULT_CSVS, parse_csv
     else:
         raise ValueError(f"unknown FlyDSL AOT kind: {kind!r}")
-    return collect_aot_jobs(DEFAULT_CSVS, parse_csv)
+
+    jobs = collect_aot_jobs(DEFAULT_CSVS, parse_csv)
+    return select_target_jobs(kind, jobs, archs)
 
 
 def _compile_one_config_for(kind: OpKind) -> Callable[..., dict[str, Any]]:
@@ -399,9 +470,10 @@ def run_aot(cache_dir: str) -> None:
     os.makedirs(cache_dir, exist_ok=True)
     os.environ["FLYDSL_RUNTIME_CACHE_DIR"] = cache_dir
 
+    archs = requested_archs()
     all_jobs: list[tuple[OpKind, dict[str, Any]]] = []
     for kind in OpKind:
-        for job in _collect_aot_jobs_for(kind):
+        for job in _collect_aot_jobs_for(kind, archs):
             all_jobs.append((kind, job))
 
     if not all_jobs:
@@ -419,6 +491,7 @@ def run_aot(cache_dir: str) -> None:
 
     print(
         f"[aiter] FlyDSL AOT: {len(all_jobs)} kernels "
+        f"for {'+'.join(sorted(archs)) if archs else 'every arch'}, "
         f"({'+'.join(k.name for k in OpKind)}), "
         f"{max_workers} worker processes (cache: {cache_dir})"
     )

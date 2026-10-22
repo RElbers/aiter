@@ -19,7 +19,11 @@ Usage:
 
 Environment variables:
     FLYDSL_RUNTIME_CACHE_DIR  Cache directory (default: ~/.flydsl/cache)
-    ARCH                      Target GPU architecture (e.g. gfx942, gfx950).
+
+    Archs to compile for, highest precedence first; the live GPU when none is set:
+    AITER_BUILD_TARGETS       (e.g. "gfx942:304", "gfx942:304;gfx950:256")
+    ARCH                      (e.g. "gfx942", "gfx942;gfx950")
+    GPU_ARCHS                 (e.g. "gfx942", "gfx942;gfx950")
 """
 
 import argparse
@@ -29,12 +33,15 @@ import sys
 import time
 
 from aiter.aot.flydsl.common import (
+    OpKind,
+    cli_requested_archs,
     collect_aot_jobs,
     compile_only_env,
-    cu_num_to_arch,
+    job_arch,
     job_identity,
     override_env,
     run_jobs_parallel,
+    select_target_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.kernels.tensor_shim import ptr_arg as _ptr_view_safe
@@ -63,7 +70,6 @@ DEFAULT_CSVS = [
     AITER_CONFIGS.AITER_CONFIG_FMOE_FILE,
     AITER_CONFIGS.AITER_CONFIG_FHMOE_FILE,
 ]
-MOE_AOT_ARCH_DEFAULT = "gfx950"
 
 
 def _mx_w2_scale_numel(experts: int, model_dim: int, inter_dim: int) -> int:
@@ -94,7 +100,7 @@ def parse_csv(csv_path: str):
             topk = int(row["topk"])
             doweight_stage1 = bool(int(row.get("doweight_stage1", "0")))
             cu_num = int(row.get("cu_num", "0"))
-            gfx = (row.get("gfx") or "").strip()
+            gfx = (row.get("gfx") or "").strip().lower()
             block_m = int(row.get("block_m", "0") or "0")
             shared_expert_id = int(row.get("shared_expert_id", "-1") or "-1")
             model_dim_pad = int(row.get("hidden_pad", "0") or "0")
@@ -1061,7 +1067,7 @@ def compile_one_config(
 
     Returns a dict with timing info.
     """
-    aot_arch = gfx or cu_num_to_arch(cu_num, default=MOE_AOT_ARCH_DEFAULT)
+    aot_arch = job_arch(OpKind.MOE, cu_num, gfx)
     is_epilogue = kwargs.get("stage") == "epilogue"
     shape_str = (
         f"{kernel_name}  inter_dim={inter_dim} topk={topk}"
@@ -1165,9 +1171,10 @@ def main():
     cache_dir = os.path.expanduser(
         os.environ.get("FLYDSL_RUNTIME_CACHE_DIR", "~/.flydsl/cache")
     )
-    arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS") or "(auto-detect)"
-
-    all_jobs = collect_aot_jobs(csv_paths, parse_csv)
+    archs = cli_requested_archs()
+    all_jobs = select_target_jobs(
+        OpKind.MOE, collect_aot_jobs(csv_paths, parse_csv), archs
+    )
 
     stage1_jobs = [j for j in all_jobs if j["stage"] == 1]
     stage2_jobs = [j for j in all_jobs if j["stage"] == 2]
@@ -1183,7 +1190,7 @@ def main():
     print(f"  Total jobs:     {len(all_jobs)}")
     print("  Compile arch: (from gfx, with legacy cu_num fallback)")
     print(f"  Cache dir:    {cache_dir}")
-    print(f"  Target arch:  {arch}")
+    print(f"  Target arch:  {'+'.join(sorted(archs)) if archs else 'every arch'}")
     print("=" * 72)
 
     total_t0 = time.time()

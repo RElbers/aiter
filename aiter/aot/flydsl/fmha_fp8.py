@@ -25,13 +25,14 @@ import sys
 import time
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     compile_only_env,
     dedupe_jobs,
+    job_arch,
     override_env,
     run_jobs_parallel,
 )
 
-AOT_ARCH = "gfx950"
 LAYOUTS = {
     "varlen_cross": (True, True),
     "varlen": (True, False),
@@ -252,6 +253,7 @@ def _compile_to_cache(
 
 
 def compile_one_config(**job) -> dict:
+    aot_arch = job_arch(OpKind.FMHA_FP8)
     result = {**job, "compile_time": None}
     params = {k: v for k, v in job.items() if k != "kernel_name"}
     from torch._subclasses.fake_tensor import FakeTensorMode
@@ -260,7 +262,7 @@ def compile_one_config(**job) -> dict:
     try:
         # COMPILE_ONLY is mandatory: without it flyc.compile also launches.
         with (
-            override_env("FLYDSL_GPU_ARCH", AOT_ARCH),
+            override_env("FLYDSL_GPU_ARCH", aot_arch),
             compile_only_env(),
             FakeTensorMode(),
         ):

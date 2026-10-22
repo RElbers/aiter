@@ -247,6 +247,117 @@ def test_gpu_archs_parses_the_same_everywhere():
         raise AssertionError(f"GPU_ARCHS={gpu_archs!r}: get_build_targets_env -> {got}")
 
 
+def test_flydsl_aot_reads_arch_only_in_the_clis():
+    from aiter.aot.flydsl import common
+    from aiter.jit.utils import chip_info
+
+    # (env, run_aot targets, CLI targets). ARCH=64 is what conda-build exports.
+    cases = (
+        (
+            {"AITER_BUILD_TARGETS": "gfx950:128", "ARCH": "gfx942"},
+            {"gfx950"},
+            {"gfx950"},
+        ),
+        (
+            {"ARCH": "gfx942,gfx1250", "GPU_ARCHS": "gfx950"},
+            {"gfx950"},
+            {"gfx942", "gfx1250"},
+        ),
+        ({"ARCH": "64", "GPU_ARCHS": "gfx1250"}, {"gfx1250"}, {"gfx1250"}),
+    )
+    for env, run_aot_archs, cli_archs in cases:
+        with _target_env(**env), _cleared_cache(chip_info.get_gfx_list):
+            archs = (common.requested_archs(), common.cli_requested_archs())
+
+        assert archs == (run_aot_archs, cli_archs), (env, archs)
+
+
+def test_flydsl_aot_runs_every_kind_through_target_selection():
+    import importlib.util
+
+    if importlib.util.find_spec("flydsl") is None:
+        # CI runs this file directly, where a pytest skip would escape __main__.
+        if "pytest" in sys.modules:
+            import pytest
+
+            pytest.skip("flydsl is not installed")
+        print(
+            "SKIP test_flydsl_aot_runs_every_kind_through_target_selection: no flydsl"
+        )
+        return
+    from aiter.aot.flydsl import common
+    from aiter.jit.utils.build_targets import KNOWN_GFX
+
+    class CompileReached(BaseException):
+        pass
+
+    def stop_at_compile_arch(name, value):
+        if name == "FLYDSL_GPU_ARCH":
+            compile_archs.append(value)
+            raise CompileReached
+        return contextlib.nullcontext()
+
+    # Expected architectures are independent of the filtering/compile helpers.
+    probes = (
+        {},
+        {"cu_num": 80},
+        {"cu_num": 304},
+        {"cu_num": 128},
+        {"gfx": "gfx1250", "cu_num": 256},
+    )
+    for kind in common.OpKind:
+        if kind in (
+            common.OpKind.MXFP4_MOE,
+            common.OpKind.MEGA_MOE,
+            common.OpKind.FMHA_FP8,
+        ):
+            expected = ["gfx950"] * len(probes)
+        elif kind is common.OpKind.GROUPED_MOE:
+            expected = ["gfx1250"] * len(probes)
+        else:
+            expected = ["gfx950", "gfx942", "gfx942", "gfx950", "gfx1250"]
+        assert [common.job_arch(kind, **p) for p in probes] == expected, kind
+        jobs = [*probes, probes[1]]
+        expected_jobs = [
+            j for j, a in zip(jobs, [*expected, expected[1]]) if a == "gfx942"
+        ]
+        before = [dict(j) for j in jobs]
+        assert common.select_target_jobs(kind, jobs, {"gfx942"}) == expected_jobs, kind
+        assert jobs == before, kind
+
+    for kind in common.OpKind:
+        jobs = common._collect_aot_jobs_for(kind, None)
+        assert jobs, kind
+
+        # job_arch must name the arch compile_one_config actually builds for:
+        # check one job per (gfx, cu_num), the inputs an arch is derived from,
+        # stopping before any compile work.
+        compile_one_config = common._compile_one_config_for(kind)
+        module = sys.modules[compile_one_config.__module__]
+        samples = {(j.get("gfx", ""), j.get("cu_num", 0)): j for j in jobs}
+        # A row's gfx outranks its CU count, which only identifies legacy rows:
+        # 256 CUs alone would map to gfx950.
+        if "gfx" in jobs[0]:
+            probe = {**jobs[0], "gfx": "gfx1250", "cu_num": 256}
+            assert (
+                common.job_arch(kind, probe["cu_num"], probe["gfx"]) == "gfx1250"
+            ), kind
+            samples["probe"] = probe
+        for job in samples.values():
+            arch = common.job_arch(kind, job.get("cu_num", 0), job.get("gfx", ""))
+            assert arch in KNOWN_GFX - {"gfx908"}, (kind, arch)
+            compile_archs = []
+            with mock.patch.object(module, "override_env", stop_at_compile_arch):
+                try:
+                    compile_one_config(**dict(job))
+                except CompileReached:
+                    pass
+            assert compile_archs == [arch], (kind, arch, compile_archs)
+
+        # No kind compiles for gfx908, so every job of every kind must drop.
+        assert common._collect_aot_jobs_for(kind, {"gfx908"}) == [], kind
+
+
 @contextlib.contextmanager
 def _target_env(**values):
     with mock.patch.dict(os.environ):
@@ -274,4 +385,6 @@ if __name__ == "__main__":
     test_gpu_archs_takes_the_live_cu_count()
     test_unparseable_gpu_archs_defers_to_build_targets()
     test_gpu_archs_parses_the_same_everywhere()
+    test_flydsl_aot_reads_arch_only_in_the_clis()
+    test_flydsl_aot_runs_every_kind_through_target_selection()
     print("ALL_PASS")
