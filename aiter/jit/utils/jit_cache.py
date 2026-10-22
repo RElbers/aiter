@@ -323,10 +323,7 @@ def stage_blob_sources(
         _seed_staging_files(staging_dir, seed_files)
 
         output_dir = os.path.join(staging_dir, "")
-        # Only this build's request may reach the generator, never an inherited
-        # request left in a runtime caller's shell.
         codegen_env = os.environ.copy()
-        codegen_env.pop("AITER_BUILD_TARGETS", None)
         if build_targets is not None:
             codegen_env["AITER_BUILD_TARGETS"] = build_targets
 

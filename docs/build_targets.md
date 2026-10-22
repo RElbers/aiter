@@ -1,9 +1,14 @@
 # Explicit GPU build targets
 
-`AITER_BUILD_TARGETS` describes the destination GPU variants for an explicit
-build. It supports several CU counts of one architecture and mixed architectures,
-without using the build host's GPU as a substitute. Runtime hardware detection,
-launch geometry, and an operation's cold JIT build ignore this variable.
+`AITER_BUILD_TARGETS` selects destination GPU variants for prebuilds and runtime
+JIT compilation. It supports several CU counts of one architecture and mixed
+architectures, without using the build host's GPU as a substitute. It does not
+change runtime hardware detection or launch geometry.
+
+Like `GPU_ARCHS`, the request is honored even when it excludes the running GPU.
+Such a build may compile successfully but cannot be assumed to run on that GPU.
+Changing the variable does not itself trigger a rebuild of an already loaded
+module.
 
 ```sh
 # One instruction-set target, two tuning variants.
@@ -115,12 +120,12 @@ args = {key: value for key, value in args.items() if key in parameters}
 core.build_module(**args)
 ```
 
-Shared build functions receive immutable pairs and never read
-`AITER_BUILD_TARGETS` implicitly. `build_module` uses the request for compiler
-architecture selection and passes its normalized value as `AITER_BUILD_TARGETS`
-in each generator's subprocess environment. The parent environment is unchanged.
-Runtime JIT children omit the inherited variable, even when it contains an
-invalid request. Parallel builds keep their requests local.
+`get_args_of_build` and `build_module` resolve the `build_targets` argument,
+falling back to `AITER_BUILD_TARGETS` when it is omitted. This applies equally to
+prebuilds and runtime JIT. Invalid requests fail when a build is requested.
+`build_module` uses the resolved pairs for compiler architecture selection and
+passes their normalized value in each generator's subprocess environment.
+The parent environment is unchanged. Parallel builds keep their requests local.
 
 CK FMHA's upstream generator uses `--targets` instead. `get_args_of_build` and
 the dynamic attention recipe builder include that argument in their commands.
@@ -128,7 +133,8 @@ Callers constructing custom commands for generators that do not understand
 `AITER_BUILD_TARGETS` must supply those generators' target arguments themselves.
 
 `csrc.cpp_itfs.utils.compile_template_op` and `compile_lib` accept the same
-`build_targets` keyword. Their runtime callers omit it. Template artifacts live
+`build_targets` keyword and also read `AITER_BUILD_TARGETS` when it is omitted.
+Template artifacts live
 under `AITER_ROOT_DIR/build/targets/<sorted architectures joined by +>/<folder>`.
 Python and C++ prefer an exact match, then an existing compatible superset.
 Runtime can therefore find a fat library after build variables are removed.

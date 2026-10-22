@@ -1,5 +1,9 @@
+from build_targets import resolve_build_targets
+
+
 def get_mha_target_flags(build_targets=None) -> str:
-    """Use CK FMHA's target names, preserving its defaults on gfx9 runtime builds."""
+    """Use CK FMHA's target names, preserving its defaults without explicit pairs."""
+    build_targets = resolve_build_targets(build_targets)
     if build_targets is not None:
         # CK FMHA calls gfx942's target family gfx9.
         families = sorted(

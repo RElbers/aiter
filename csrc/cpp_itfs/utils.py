@@ -238,13 +238,15 @@ def _template_runtime_arch():
 
 
 def validate_and_update_archs(build_targets=None):
-    if build_targets is not None:
-        from build_targets import resolve_build_targets
+    from build_targets import resolve_build_targets
 
-        targets = resolve_build_targets(build_targets)
-        if targets is None:
-            raise ValueError("An explicit template build request must not be empty")
+    targets = resolve_build_targets(build_targets)
+    if build_targets is not None and targets is None:
+        raise ValueError("An explicit template build request must not be empty")
+
+    if targets is not None:
         return sorted({gfx for gfx, _ in targets})
+
     archs = os.environ.get("GPU_ARCHS", "native").split(";")
     archs = [arch.strip().split(":")[0] for arch in archs]
     # List of allowed architectures

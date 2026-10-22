@@ -1301,14 +1301,12 @@ def build_module(
     build_after_wait=False,
     build_targets: str | BuildTargets | None = None,
 ):
-    if build_targets is not None:
-        build_targets = resolve_build_targets(build_targets)
-        if build_targets is None:
-            raise ValueError(
-                "Pass None, rather than a blank request, "
-                "for a build without explicit targets"
-            )
+    targets = resolve_build_targets(build_targets)
+    if build_targets is not None and targets is None:
+        raise ValueError("An explicit build request must contain at least one target")
 
+    build_targets = targets
+    if build_targets is not None:
         build_after_wait = True
 
     os.makedirs(bd_dir, exist_ok=True)
@@ -1681,14 +1679,13 @@ def _get_ck_exclude_modules():
 def get_args_of_build(
     ops_name: str, exclude=None, *, build_targets: str | BuildTargets | None = None
 ):
+    targets = resolve_build_targets(build_targets)
+    if build_targets is not None and targets is None:
+        raise ValueError("An explicit build request must contain at least one target")
+
+    build_targets = targets
     mha_target_flags = ""
     if build_targets is not None:
-        build_targets = resolve_build_targets(build_targets)
-        if build_targets is None:
-            raise ValueError(
-                "An explicit build request must contain at least one target"
-            )
-
         mha_target_flags = get_mha_target_flags(build_targets)
 
     def build_for_arch(arch: str) -> bool:

@@ -90,7 +90,7 @@ def parse_build_targets(value: str | BuildTargets) -> BuildTargets:
 def resolve_build_targets(
     value: str | BuildTargets | None = None,
 ) -> BuildTargets | None:
-    """Read build-only input at an explicit build entry point, never at runtime."""
+    """Resolve destination pairs from the argument or AITER_BUILD_TARGETS."""
     if value is None:
         value = os.getenv("AITER_BUILD_TARGETS", "")
     if isinstance(value, str) and not value.strip():

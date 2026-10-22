@@ -112,7 +112,10 @@ class TestJitCacheTransaction(unittest.TestCase):
 
             def run(args, check, env):
                 self.assertTrue(check)
-                self.assertNotIn("AITER_BUILD_TARGETS", env)
+                self.assertEqual(
+                    env.get("AITER_BUILD_TARGETS"),
+                    os.environ.get("AITER_BUILD_TARGETS"),
+                )
                 output_dir = args[args.index("--output_dir") + 1]
                 _write(os.path.join(output_dir, "generated.cpp"), "// generated\n")
 
@@ -149,7 +152,10 @@ class TestJitCacheTransaction(unittest.TestCase):
 
             def run(args, check, env):
                 self.assertTrue(check)
-                self.assertNotIn("AITER_BUILD_TARGETS", env)
+                self.assertEqual(
+                    env.get("AITER_BUILD_TARGETS"),
+                    os.environ.get("AITER_BUILD_TARGETS"),
+                )
                 _write(os.path.join(args[2], "generated.cpp"), "// generated\n")
 
             with (
@@ -174,7 +180,10 @@ class TestJitCacheTransaction(unittest.TestCase):
 
             def run(args, check, env):
                 self.assertTrue(check)
-                self.assertNotIn("AITER_BUILD_TARGETS", env)
+                self.assertEqual(
+                    env.get("AITER_BUILD_TARGETS"),
+                    os.environ.get("AITER_BUILD_TARGETS"),
+                )
                 _write(os.path.join(args[2], "generated.cpp"), "// generated\n")
 
             with (
@@ -212,7 +221,10 @@ class TestJitCacheTransaction(unittest.TestCase):
 
             def run(args, check, env):
                 self.assertTrue(check)
-                self.assertNotIn("AITER_BUILD_TARGETS", env)
+                self.assertEqual(
+                    env.get("AITER_BUILD_TARGETS"),
+                    os.environ.get("AITER_BUILD_TARGETS"),
+                )
                 output_dir = args[args.index("--output_dir") + 1]
                 _write(os.path.join(output_dir, "generated.cpp"), "// generated\n")
 
@@ -937,6 +949,8 @@ with open(os.path.join(args.output_dir, "generated.cpp"), "w") as output:
             "parse": version,
             "Version": version,
             "BuildTargets": build_targets_module.BuildTargets,
+            "resolve_build_targets": build_targets_module.resolve_build_targets,
+            "format_build_targets": build_targets_module.format_build_targets,
             "get_gfx": lambda: "gfx942",
             "check_LLVM_MAIN_REVISION": lambda: 0,
             "validate_and_update_archs": lambda: ["gfx942"],
