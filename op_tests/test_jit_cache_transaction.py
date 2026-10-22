@@ -48,6 +48,9 @@ versioner_module = _load_module(
 baton_module = _load_module(
     JIT_CACHE_PATH.with_name("file_baton.py"), "aiter_file_baton_under_test"
 )
+build_targets_module = _load_module(
+    JIT_CACHE_PATH.with_name("build_targets.py"), "aiter_build_targets_under_test"
+)
 
 
 def _write_generator(directory, body):
@@ -107,8 +110,9 @@ class TestJitCacheTransaction(unittest.TestCase):
                 '-d fwd --receipt 100 --filter " @ " --output_dir {}'
             )
 
-            def run(args, check):
+            def run(args, check, env):
                 self.assertTrue(check)
+                self.assertNotIn("AITER_BUILD_TARGETS", env)
                 output_dir = args[args.index("--output_dir") + 1]
                 _write(os.path.join(output_dir, "generated.cpp"), "// generated\n")
 
@@ -143,8 +147,9 @@ class TestJitCacheTransaction(unittest.TestCase):
             op_dir = os.path.join(tmp, "work tree", "module")
             command = r'"C:\Work Tree\generator.py" {}'
 
-            def run(args, check):
+            def run(args, check, env):
                 self.assertTrue(check)
+                self.assertNotIn("AITER_BUILD_TARGETS", env)
                 _write(os.path.join(args[2], "generated.cpp"), "// generated\n")
 
             with (
@@ -167,8 +172,9 @@ class TestJitCacheTransaction(unittest.TestCase):
             op_dir = os.path.join(tmp, "work tree", "module")
             command = r'"C:\Work Tree\generator.py" {0} --again {0} --literal {{}}'
 
-            def run(args, check):
+            def run(args, check, env):
                 self.assertTrue(check)
+                self.assertNotIn("AITER_BUILD_TARGETS", env)
                 _write(os.path.join(args[2], "generated.cpp"), "// generated\n")
 
             with (
@@ -204,8 +210,9 @@ class TestJitCacheTransaction(unittest.TestCase):
                 r"--output_dir {}"
             )
 
-            def run(args, check):
+            def run(args, check, env):
                 self.assertTrue(check)
+                self.assertNotIn("AITER_BUILD_TARGETS", env)
                 output_dir = args[args.index("--output_dir") + 1]
                 _write(os.path.join(output_dir, "generated.cpp"), "// generated\n")
 
@@ -929,6 +936,7 @@ with open(os.path.join(args.output_dir, "generated.cpp"), "w") as output:
             "get_hip_version": lambda: "7.0.0",
             "parse": version,
             "Version": version,
+            "BuildTargets": build_targets_module.BuildTargets,
             "get_gfx": lambda: "gfx942",
             "check_LLVM_MAIN_REVISION": lambda: 0,
             "validate_and_update_archs": lambda: ["gfx942"],
