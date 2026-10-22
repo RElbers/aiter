@@ -4,7 +4,7 @@ import argparse
 import glob
 import json
 import os
-import sys
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -49,34 +49,6 @@ from opus_gemm_common import (
     gfx1250_splitk_fuse_kernels_list,
     kernels_list,
 )
-
-
-def _get_gfx_runtime_standalone():
-    """Probe the live GPU's arch without importing the ``aiter`` package.
-
-    ``aiter/__init__.py`` pulls in torch and the whole op surface, and under
-    AITER_REBUILD it rebuilds module_aiter_core -- in this process, which the
-    JIT spawned only to emit source text. That cost the opus build a second
-    10s core build on every rebuild. ``chip_info`` itself only needs its own
-    directory on sys.path (its imports are flat), so load it by file path.
-    """
-    import importlib.util
-
-    spec = importlib.util.find_spec("aiter")  # locates, does not execute
-    if spec is None or not spec.submodule_search_locations:
-        raise ImportError("aiter package not found")
-    utils_dir = os.path.join(
-        next(iter(spec.submodule_search_locations)), "jit", "utils"
-    )
-    if utils_dir not in sys.path:
-        sys.path.insert(0, utils_dir)
-    mod_spec = importlib.util.spec_from_file_location(
-        "_opus_chip_info", os.path.join(utils_dir, "chip_info.py")
-    )
-    mod = importlib.util.module_from_spec(mod_spec)
-    mod_spec.loader.exec_module(mod)
-    return mod.get_gfx_runtime()
-
 
 # Merge the codegen maps registered by each architecture.
 PIPELINE_HEADER_MAP = {
@@ -1251,6 +1223,17 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--archs",
+        default="",
+        required=False,
+        help=(
+            "Archs to build, separated by ',' or ';' "
+            '(e.g. "gfx942", "gfx942,gfx950"). The JIT passes the arches it '
+            "builds for. Empty, the default, builds every arch."
+        ),
+    )
+
+    parser.add_argument(
         "--tune_files",
         default=None,
         required=False,
@@ -1350,6 +1333,14 @@ if __name__ == "__main__":
                 out.append(path)
         return out
 
+    # Kids are filtered by arch only: opus fails a launch whose tuned kid is not
+    # compiled instead of falling back, and a GPU-free build cannot know the CU
+    # count of the parts it targets. The JIT passes get_gfx_list(), which reports
+    # "cpu" with no GPU and no target; that builds every arch, as an empty
+    # --archs does.
+    archs = {a.strip().lower() for a in re.split(r"[;,]", args.archs) if a.strip()}
+    target_arches = (archs - {"cpu"}) or None
+
     csv_kids: set[int] = set()
     csv_paths = _expand_tune_paths(args.tune_files)
     for path in csv_paths:
@@ -1394,22 +1385,6 @@ if __name__ == "__main__":
     # Per-arch filter: drop kids whose arch_prefix is not in the target build set.
     _kid_arch = _kid_arch_common
 
-    target_arches = None
-    gpu_archs_env = os.getenv("GPU_ARCHS", "native").strip()
-    explicit = [
-        a.strip().lower()
-        for a in gpu_archs_env.split(";")
-        if a.strip() and a.strip().lower() != "native"
-    ]
-    if explicit:
-        target_arches = set(explicit)
-    else:
-        # GPU_ARCHS=native: probe live GPU; skip filter if rocminfo unavailable.
-        try:
-            target_arches = {_get_gfx_runtime_standalone().lower()}
-        except Exception:  # noqa: BLE001
-            target_arches = None
-
     if target_arches is not None:
         before = len(S)
         S = {kid for kid in S if _kid_arch(kernels_list[kid]) in target_arches}
@@ -1425,7 +1400,7 @@ if __name__ == "__main__":
     archs_for_header = (
         sorted(target_arches)
         if target_arches is not None
-        else ["gfx942", "gfx950", "gfx1250"]
+        else sorted({_kid_arch(k) for k in kernels_list.values()})
     )
     write_if_changed(
         os.path.join(args.working_path, "opus_build_archs.h"),

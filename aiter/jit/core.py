@@ -1358,6 +1358,7 @@ def build_module(
         # gfx1250, and must test membership rather than a single resolved arch:
         # "gfx1250;gfx942" otherwise builds gfx1250 kernels whose cluster launch
         # path was compiled out (AiterAsmKernelFast then rejects them at launch).
+        # Same test as the gfx1250 flags in optCompilerConfig.json.
         if "gfx1250" in get_gfx_list() and hip_version >= Version("7.0.0"):
             flags_hip += ["-DAITER_ENABLE_CLUSTER_LAUNCH"]
 
