@@ -48,6 +48,7 @@ removed from the artifact.
 | CK GEMM, batched GEMM and CK Tile GEMM | Filter tuned rows by exact `(gfx, cu_num)` pairs, preserve fallback kernels and existing lookup keys, and compile for the unique architectures. CK Tile registries resolve destinations lazily; explicit builds do not probe the host during imports. |
 | CK two-stage MoE | Select applicable prebuild variants from tuning metadata and generate destination-specific registries. Mixed builds select the matching heuristic using execution hardware. |
 | CK Tile MXFP4 MoE | Include its existing gfx950 implementation when requested. This does not add a gfx942 or gfx1250 implementation. |
+| OPUS | Filter by architecture ownership, retaining the mandatory/default compiled kernels and applicable tuned kernels. CU pruning is deliberately not applied. Per-source compiler options survive package prebuilds. |
 | CK Tile attention recipes | Pass the destination families to the upstream generator, including its `gfx9` name for gfx942. |
 
 ## Programmatic boundary
