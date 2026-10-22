@@ -421,6 +421,55 @@ def test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch():
     assert not row_kids & compiled["gfx950"], sorted(row_kids & compiled["gfx950"])
 
 
+def test_template_libraries_compile_for_the_live_gpu():
+    import csrc.cpp_itfs.utils as cpp_utils
+
+    # A template library is compiled on first use for the GPU that loads it,
+    # whatever the build targets; they stand in only when no GPU is visible.
+    # (live GPU probe, archs compiled)
+    no_gpu = mock.Mock(side_effect=RuntimeError("no GPU"))
+    cases = (
+        (mock.Mock(return_value="gfx950"), ["gfx950"]),
+        (mock.Mock(return_value="gfx1250"), ["gfx1250"]),
+        (no_gpu, ["gfx942", "gfx950"]),
+    )
+    for get_gfx_runtime, archs in cases:
+        with (
+            mock.patch.object(
+                cpp_utils, "get_gfx_list", return_value=["gfx942", "gfx950"]
+            ),
+            mock.patch.object(cpp_utils, "get_gfx_runtime", get_gfx_runtime),
+            _cleared_cache(cpp_utils.template_archs),
+        ):
+            assert cpp_utils.template_archs() == archs, archs
+
+    with (
+        mock.patch.object(
+            cpp_utils, "get_gfx_runtime", side_effect=KeyError("unknown GPU")
+        ),
+        _cleared_cache(cpp_utils.template_archs),
+        TestCase().assertRaisesRegex(KeyError, "unknown GPU"),
+    ):
+        cpp_utils.template_archs()
+
+
+def test_hsaco_lookup_uses_live_arch():
+    import csrc.cpp_itfs.utils as cpp_utils
+
+    with (
+        tempfile.TemporaryDirectory() as build_dir,
+        mock.patch.object(cpp_utils, "BUILD_DIR", build_dir),
+        mock.patch.object(cpp_utils, "get_gfx_list", return_value=["gfx942", "gfx950"]),
+        mock.patch.object(cpp_utils, "get_gfx_runtime", return_value="gfx950"),
+    ):
+        hsaco_name = cpp_utils.get_default_func_name("kernel", (1,))
+        hsaco_dir = Path(build_dir) / "gfx950"
+        hsaco_dir.mkdir()
+        (hsaco_dir / f"{hsaco_name}.hsaco").write_bytes(b"test")
+
+        assert cpp_utils.check_hsaco("kernel", {"X": 1})
+
+
 @contextlib.contextmanager
 def _target_env(**values):
     with mock.patch.dict(os.environ):
@@ -452,4 +501,6 @@ if __name__ == "__main__":
     test_flydsl_aot_reads_arch_only_in_the_clis()
     test_flydsl_aot_runs_every_kind_through_target_selection()
     test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch()
+    test_template_libraries_compile_for_the_live_gpu()
+    test_hsaco_lookup_uses_live_arch()
     print("ALL_PASS")
