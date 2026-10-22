@@ -66,6 +66,7 @@ removed from the artifact.
 | CK Tile attention recipes | Pass the destination families to the upstream generator, including its `gfx9` name for gfx942. |
 | Assembly manifest codegen | Select the requested architecture entries. Existing object availability and runtime guards still apply. |
 | FlyDSL AOT | Package and all AOT CLIs use the same job selector. GEMM, convolution and MoE use job metadata; chunk GDN honors explicit gfx and expands portable jobs. Persistent MXFP4 retains CU specialization. Fixed gfx950 families keep their actual compiler target. |
+| Generic template HIP libraries | The explicit Python API supports multi-architecture compilation, with compatible cache lookup shared by Python and C++. CU count adds no cache dimension to these libraries. |
 
 FlyDSL CLI example (requires the FlyDSL version pinned by this checkout):
 
@@ -87,7 +88,7 @@ gfx950/256-CU compilation constants. Unsupported batched FlyDSL kernel families
 still emit the existing missing-AOT-wiring warning. These constraints also apply
 when a package requests additional variants.
 
-## Programmatic boundary
+## Programmatic boundary and template cache
 
 Resolve the request at an explicit entry point, before evaluating recipes.
 Filter the arguments against the build function's signature: recipes also
@@ -114,6 +115,16 @@ Shared build functions receive immutable pairs and never read
 `AITER_BUILD_TARGETS` implicitly. Destination-aware codegen receives explicit
 CLI arguments. Runtime JIT children omit the inherited variable, even when it
 contains an invalid request. Parallel builds keep their requests local.
+
+`csrc.cpp_itfs.utils.compile_template_op` and `compile_lib` accept the same
+`build_targets` keyword. Their runtime callers omit it. Template artifacts live
+under `AITER_ROOT_DIR/build/targets/<sorted architectures joined by +>/<folder>`.
+Python and C++ prefer an exact match, then an existing compatible superset.
+Runtime can therefore find a fat library after build variables are removed.
+Libraries without architecture-qualified paths are rebuilt once. Publication is
+atomic, locks use the same directory, and loaded handles are keyed by resolved
+file path. Custom folders are supported. `AITER_ROOT_DIR` is the exact root in
+both languages, fixing C++'s previous extra `/.aiter` suffix.
 
 ## Tuning data and workflow entry points
 
