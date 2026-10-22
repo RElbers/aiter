@@ -4,7 +4,6 @@
 #include "gemm_a8w8_bpreshuffle_cktile_common.cuh"
 #include "gemm_a8w8_bpreshuffle_cktile_lookup.h"
 #include "gemm_a8w8_bpreshuffle_cktile_manifest.h"
-#include "gemm_dispatch_utils.h"
 #include "py_itfs_common.h"
 #include <string>
 
@@ -14,12 +13,6 @@ using RowwiseKernel = std::function<torch::Tensor(
 // For certain high priority shapes, we directly use the best kernel rather
 // than use heuristics.
 using RowwiseKernelMap = std::unordered_map<int, RowwiseKernel>;
-
-#ifdef AITER_CKTILE_TUNE_ARCH_LOOKUP
-using RowwiseLookup = std::unordered_map<std::string_view, RowwiseKernelMap>;
-#else
-using RowwiseLookup = RowwiseKernelMap;
-#endif
 
 // Helper function to return the next largest power of 2
 static constexpr int nextPow2(unsigned int num)
@@ -37,29 +30,20 @@ RowwiseKernel rowwise_dispatch(int id)
     // This is fine since kernels are padded anyway.
 
     // First check if this shape is available in the direct lookup.
-    static const auto generated_lookup = [] {
+    static const auto lookup = [] {
         if constexpr(std::is_same_v<EDataType, F16>)
         {
-            return RowwiseLookup{GENERATE_LOOKUP_TABLE(DDataType, F16)};
+            return RowwiseKernelMap{GENERATE_LOOKUP_TABLE(DDataType, F16)};
         }
         else if constexpr(std::is_same_v<EDataType, B16>)
         {
-            return RowwiseLookup{GENERATE_LOOKUP_TABLE(DDataType, B16)};
+            return RowwiseKernelMap{GENERATE_LOOKUP_TABLE(DDataType, B16)};
         }
         else
         {
             static_assert(false, "rowwise_dispatch used with unsupported dtype!");
         }
     }();
-
-#ifdef AITER_CKTILE_TUNE_ARCH_LOOKUP
-    const auto gfx     = get_device_gfx();
-    const auto arch_it = generated_lookup.find(gfx);
-    TORCH_CHECK(arch_it != generated_lookup.end(), "Tuning library has no kernels for ", gfx);
-    const auto& lookup = arch_it->second;
-#else
-    const auto& lookup = generated_lookup;
-#endif
 
     TORCH_CHECK(id < lookup.size(),
                 "Kernel id " + std::to_string(id) +

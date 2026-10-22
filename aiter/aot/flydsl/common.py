@@ -120,13 +120,16 @@ def select_aot_jobs(
             available_archs.update(targets.archs)
             covered.update(pairs)
             continue
-        arch = (
-            "gfx950"
-            if fixed
-            else (
-                gfx or ("gfx1250" if kind is OpKind.GROUPED_MOE else cu_num_to_arch(cu))
-            )
-        )
+
+        if fixed:
+            arch = "gfx950"
+        elif gfx:
+            arch = gfx
+        elif kind is OpKind.GROUPED_MOE:
+            arch = "gfx1250"
+        else:
+            arch = cu_num_to_arch(cu)
+
         available_archs.add(arch)
         if targets.archs is not None and arch not in targets.archs:
             continue
@@ -237,7 +240,7 @@ def override_env(var_name: str, value: str | None) -> Iterator[None]:
             os.environ[var_name] = prev
 
 
-def _unfiltered_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
+def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
     """Load DEFAULT_CSVS + parse_csv for the named kind and return its
     job list. Note: importing .gemm / .moe / .chunk_gdn_h here also
     runs their module-level imports, which pull in FlyDSL (e.g.
@@ -267,13 +270,6 @@ def _unfiltered_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
     else:
         raise ValueError(f"unknown FlyDSL AOT kind: {kind!r}")
     return collect_aot_jobs(DEFAULT_CSVS, parse_csv)
-
-
-def _collect_aot_jobs_for(
-    kind: OpKind, targets: AotTargets | None = None
-) -> list[dict[str, Any]]:
-    targets = targets if targets is not None else resolve_aot_targets()
-    return select_aot_jobs(kind, _unfiltered_aot_jobs_for(kind), targets)
 
 
 def _compile_one_config_for(kind: OpKind) -> Callable[..., dict[str, Any]]:
@@ -513,7 +509,9 @@ def run_aot(cache_dir: str, *, build_targets=None) -> None:
 
     all_jobs: list[tuple[OpKind, dict[str, Any]]] = []
     for kind in OpKind:
-        for job in _collect_aot_jobs_for(kind, targets):
+        jobs = _collect_aot_jobs_for(kind)
+        jobs = select_aot_jobs(kind, jobs, targets)
+        for job in jobs:
             all_jobs.append((kind, job))
 
     if not all_jobs:

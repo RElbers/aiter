@@ -298,30 +298,7 @@ torch::Tensor
             )
             f.write(MAINFEST_end)
 
-    def gen_tuning_arch_lookup(self, registries):
-        lines = ["{"]
-        for arch, registry in registries.items():
-            lines.append(f'    {{"{arch}", {{')
-            lines.extend(
-                f"        {{{kid}, {kernel.name}<DTYPE, ETYPE>}},"
-                for kid, kernel in registry.items()
-            )
-            lines.append("    }},")
-        lines.append("}")
-
-        path = Path(self.working_path) / "gemm_a8w8_bpreshuffle_cktile_lookup.h"
-        path.write_text(
-            "// SPDX-License-Identifier: MIT\n"
-            "// Copyright (C) 2026, Advanced Micro Devices, Inc. All rights reserved.\n"
-            "#pragma once\n\n"
-            "#ifdef USE_ROCM\n"
-            "#define AITER_CKTILE_TUNE_ARCH_LOOKUP 1\n"
-            "#define GENERATE_LOOKUP_TABLE(DTYPE, ETYPE) \\\n"
-            + " \\\n".join(lines)
-            + "\n#endif // USE_ROCM\n"
-        )
-
-    def gen_instances(self, kernels_dict, tuning_archs=None):
+    def gen_instances(self, kernels_dict):
         if os.path.exists(self.impl_path):
             shutil.rmtree(self.impl_path)
         os.mkdir(self.impl_path)
@@ -332,11 +309,7 @@ torch::Tensor
         for k in kernels_dict.values():
             self.gen_instance(k)
 
-        if tuning_archs is None:
-            self.gen_lookup_dict(kernels_dict)
-        else:
-            self.gen_tuning_arch_lookup(tuning_archs)
-
+        self.gen_lookup_dict(kernels_dict)
         self.gen_manifest_head(kernels_dict)
 
 
@@ -352,23 +325,28 @@ def get_tune_dict(tune_dict_csv, targets=None):
             libtype="cktile",
             kernels_by_name=kernels_by_name,
         )
+
+    df = pd.read_csv(tune_dict_csv) if os.path.exists(tune_dict_csv) else None
     tune_dict = {}
     defaults = {}
     for arch in sorted({gfx for gfx, _ in targets}):
         kernels_list, arch_defaults = get_kernel_registry(arch)
         defaults.update((kernel.name, kernel) for kernel in arch_defaults.values())
-        if os.path.exists(tune_dict_csv):
-            tune_dict.update(
-                build_tune_dict(
-                    pd.read_csv(tune_dict_csv),
-                    {},
-                    kernels_list,
-                    libtype="cktile",
-                    kernels_by_name=kernels_by_name,
-                    targets=tuple(pair for pair in targets if pair[0] == arch),
-                    tune_source=tune_dict_csv,
-                )
-            )
+        if df is None:
+            continue
+
+        arch_targets = tuple(pair for pair in targets if pair[0] == arch)
+        tuned_kernels = build_tune_dict(
+            df,
+            {},
+            kernels_list,
+            libtype="cktile",
+            kernels_by_name=kernels_by_name,
+            targets=arch_targets,
+            tune_source=tune_dict_csv,
+        )
+        tune_dict.update(tuned_kernels)
+
     tune_dict.update((-i, kernel) for i, kernel in enumerate(defaults.values(), 1))
     return tune_dict
 
@@ -407,20 +385,18 @@ if __name__ == "__main__":
     targets = resolve_build_targets(args.build_targets)
     codegen = gemm_a8w8_bpreshuffle_cktile_codegen(args.working_path, args.tune)
 
-    if args.tune and targets is not None:
-        registries = {
-            arch: get_kernel_registry(arch)[0]
-            for arch in sorted({gfx for gfx, _ in targets})
-        }
-        # Kernel IDs are architecture-local; deduplicate implementations, not IDs.
-        kernels = {
-            kernel.name: kernel
-            for registry in registries.values()
-            for kernel in registry.values()
-        }
-        codegen.gen_instances(kernels, tuning_archs=registries)
-    elif args.tune:
-        kernels_list, _ = get_kernel_registry()
+    if args.tune:
+        arch = None
+        if targets is not None:
+            archs = sorted({gfx for gfx, _ in targets})
+            if len(archs) != 1:
+                parser.error(
+                    "--tune supports one architecture per build; "
+                    "build each architecture separately"
+                )
+            arch = archs[0]
+
+        kernels_list, _ = get_kernel_registry(arch)
         codegen.gen_instances(kernels_list)
     else:
         codegen.gen_instances(get_tune_dict(args.tune_file, targets))
