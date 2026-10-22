@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 import sys
 import time
 
@@ -166,10 +167,19 @@ def _row_npq_per_sample(shape) -> int:
     )
 
 
+def _requested_archs():
+    """ARCH / GPU_ARCHS as a set, or None. Applied in parse_csv so setup.py's run_aot sees it."""
+    arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
+    if not arch:
+        return None
+    return {a.strip() for a in re.split(r"[;,]", arch) if a.strip()} or None
+
+
 def parse_csv(csv_path: str):
     """Parse the tuned conv CSV into unique conv and transpose compile jobs."""
     jobs = []
     seen = set()
+    keep_archs = _requested_archs()
 
     with open(csv_path, newline="") as f:
         for raw in csv.DictReader(f):
@@ -202,6 +212,8 @@ def parse_csv(csv_path: str):
 
             cu_num = int(row.get("cu_num") or 0)
             gfx = row.get("gfx", "")
+            if keep_archs is not None and job_arch(cu_num, gfx) not in keep_archs:
+                continue
 
             groups = shape["groups"]
             cgp = _pad_channels(shape["C"] // groups)

@@ -26,11 +26,6 @@ on:
         description: 'Create a missing scheduled release branch/tag from release_ref. Post-release tags must already exist.'
         type: boolean
         default: true
-      gpu_archs:
-        description: 'GPU architectures or gfx:CU pairs (default: gfx942;gfx950)'
-        required: false
-        type: string
-        default: 'gfx942;gfx950'
       force_rebuild:
         description: 'Build and upload even if the GitHub Release already has the expected wheel assets.'
         type: boolean
@@ -259,7 +254,7 @@ jobs:
       docker_image_py312: pytorch/manylinux2_28-builder:rocm${{ matrix.rocm_version }}
       build_py310: true
       build_py312: true
-      gpu_archs: ${{ github.event.inputs.gpu_archs || 'gfx942;gfx950' }}
+      gpu_archs: 'gfx942;gfx950'
       runner: build-only-aiter
       add_date_stamp: false
       use_manylinux: true

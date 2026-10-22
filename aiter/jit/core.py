@@ -1309,9 +1309,6 @@ def build_module(
                 "for a build without explicit targets"
             )
 
-        logger.info(
-            "Explicit build of %s for %s", md_name, format_build_targets(build_targets)
-        )
         build_after_wait = True
 
     os.makedirs(bd_dir, exist_ok=True)

@@ -623,9 +623,10 @@ if __name__ == "__main__":
     # b_type = "fp8"
     # quant_type = "per_token"
 
-    a_types = ["bf16"] if targets is None or "gfx950" in archs else []
-    if "gfx950" in archs:
-        a_types.append("fp8")
+    if targets is None:
+        a_types = ["bf16", "fp8"] if arch == "gfx950" else ["bf16"]
+    else:
+        a_types = ["bf16", "fp8"] if "gfx950" in archs else []
     b_type = "fp4"
     quant_type = "1x32"
 

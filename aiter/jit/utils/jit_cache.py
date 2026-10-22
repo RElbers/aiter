@@ -350,14 +350,7 @@ def stage_blob_sources(
                 command_line = (
                     subprocess.list2cmdline(args) if IS_WINDOWS else shlex.join(args)
                 )
-                if build_targets is not None:
-                    logger.info(
-                        "exec_blob [AITER_BUILD_TARGETS=%s] ---> %s",
-                        build_targets,
-                        command_line,
-                    )
-                else:
-                    logger.info("exec_blob ---> %s", command_line)
+                logger.info("exec_blob ---> %s", command_line)
             subprocess.run(args, check=True, env=codegen_env)
 
         generated_build_inputs = [

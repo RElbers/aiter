@@ -44,7 +44,7 @@ RowwiseKernel rowwise_dispatch(int id)
             static_assert(false, "rowwise_dispatch used with unsupported dtype!");
         }
     }();
-
+    
     TORCH_CHECK(id < lookup.size(),
                 "Kernel id " + std::to_string(id) +
                     " is out of range! (lookup.size()=" + std::to_string(lookup.size()) + ")");

@@ -60,9 +60,6 @@ def build_summary(summary: Path) -> None:
         ["Release type", f"`{release_type}`"],
         ["GPU architectures", f"`{gpu_archs}`"],
     ]
-    targets = os.environ.get("SUMMARY_BUILD_TARGETS")
-    if targets:
-        rows.append(["Build variants", f"`{targets}`"])
     if index_url:
         rows.append(["Index URL", index_url])
     _table(summary, ["Item", "Value"], rows)

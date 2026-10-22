@@ -65,7 +65,7 @@ removed from the artifact.
 | OPUS | Filter by architecture ownership, retaining the mandatory/default compiled kernels and applicable tuned kernels. CU pruning is deliberately not applied. Per-source compiler options survive package prebuilds. |
 | CK Tile attention recipes | Pass the destination families to the upstream generator, including its `gfx9` name for gfx942. |
 | Assembly manifest codegen | Select the requested architecture entries. Existing object availability and runtime guards still apply. |
-| FlyDSL AOT | Package and all AOT CLIs use the same job selector. GEMM, convolution and MoE use job metadata; chunk GDN honors explicit gfx and expands portable jobs. Persistent MXFP4 retains CU specialization. Fixed gfx950 families keep their actual compiler target. |
+| FlyDSL AOT | Explicit package builds and AOT CLIs use the same job selector. GEMM, convolution and MoE use job metadata; chunk GDN honors explicit gfx and expands portable jobs. Persistent MXFP4 retains CU specialization. Fixed gfx950 families keep their actual compiler target. |
 | Generic template HIP libraries | The explicit Python API supports multi-architecture compilation, with compatible cache lookup shared by Python and C++. CU count adds no cache dimension to these libraries. |
 
 FlyDSL CLI example (requires the FlyDSL version pinned by this checkout):
@@ -75,12 +75,11 @@ AITER_AOT_IMPORT=1 python -m aiter.aot.flydsl.gemm \
   --build-targets 'gfx950:128;gfx950:256' --csv /path/to/tuned.csv
 ```
 
-FlyDSL `ARCH`/`GPU_ARCHS` filtering now applies consistently to package
-builds and CLIs. `native` is resolved once to the detected architecture before
-selection, fixing the previous literal-string filter. The compiler still uses
-the job's destination, including the CU-to-architecture fallback for older
-rows without gfx metadata. MoE workers clear cached CU answers both when entering
-and when leaving a compilation override.
+Without explicit targets, FlyDSL retains the existing `ARCH`/`GPU_ARCHS`
+filtering of each entry point, including its handling of `native`. Explicit
+builds use the job's destination, including the CU-to-architecture fallback for
+older rows without gfx metadata. MoE workers clear cached CU answers both when
+entering and when leaving a compilation override.
 
 AOT selection does not add missing algorithms or configurations. Grouped MoE's
 existing AOT implementation covers auxiliary kernels. Mega MoE retains its fixed
@@ -140,19 +139,20 @@ both languages, fixing C++'s previous extra `/.aiter` suffix.
 
 ## Tuning data and workflow entry points
 
-Requested CU variants need existing tuning rows. Missing rows warn with the
-target and table/backend while keeping supported fallbacks or runtime JIT.
+Explicitly requested CU variants need existing tuning rows. Missing rows warn
+with the target and table/backend while keeping supported fallbacks or runtime JIT.
 Unknown kernel IDs/names in applicable CK rows still fail strictly. A missing
 embedded object is a separate error; neither case changes the destination to
 the build host's GPU.
 
-The release, nightly and release-automation workflows accept pairs in their
-existing `gpu_archs` **workflow input**, for example `gfx950:128;gfx950:256`.
+The release and nightly workflows accept pairs in their existing `gpu_archs`
+**workflow input**, for example `gfx950:128;gfx950:256`.
 A build step translates this into architecture-only `GPU_ARCHS` and explicit
-`AITER_BUILD_TARGETS`, forwards both into the build container, and records them
-in the summary. Legacy architecture-only workflow inputs remain unchanged. This
-keeps the release workflow within the ten `workflow_dispatch` input limit; it
-does not extend the syntax of the `GPU_ARCHS` environment variable.
+`AITER_BUILD_TARGETS` and forwards both into the build container.
+Architecture-only workflow inputs remain unchanged. Release automation retains
+its fixed `gfx942;gfx950` destinations. Reusing the existing input keeps the
+release workflow within the ten `workflow_dispatch` input limit; it does not
+extend the syntax of the `GPU_ARCHS` environment variable.
 
 When the workflow builds an older revision without explicit-target support,
 architecture-only inputs still work. Explicit pairs are rejected with an

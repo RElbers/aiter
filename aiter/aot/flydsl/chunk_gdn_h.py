@@ -97,7 +97,7 @@ def _torch_dtype_for_kernel(dtype_str: str):
     return getattr(torch, name)
 
 
-def parse_csv(csv_path: str) -> list[dict[str, Any]]:
+def parse_csv(csv_path: str, *, include_gfx: bool = False) -> list[dict[str, Any]]:
     """Expand opt tuned rows into compile jobs.
 
     Shapes and layout switches come straight from the row -- including the
@@ -152,7 +152,6 @@ def parse_csv(csv_path: str) -> list[dict[str, Any]]:
                     "kernel_name": _KERNEL_NAME,
                     "dtype": dtype,
                     "cu_num": cu_num,
-                    "gfx": (row.get("gfx") or "").strip(),
                     "K": K,
                     "V": V,
                     "BT": BT,
@@ -168,6 +167,9 @@ def parse_csv(csv_path: str) -> list[dict[str, Any]]:
                     "use_state_indices": use_state_indices,
                     **_FIXED_SWITCHES,
                 }
+                if include_gfx:
+                    job["gfx"] = (row.get("gfx") or "").strip()
+
                 key = job_identity(job)
                 if key in seen:
                     continue
@@ -365,7 +367,9 @@ def main():
     )
     arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS") or "(auto-detect)"
 
-    jobs = collect_aot_jobs(csv_paths, parse_csv)
+    jobs = collect_aot_jobs(
+        csv_paths, lambda path: parse_csv(path, include_gfx=targets is not None)
+    )
     jobs = select_aot_jobs(OpKind.CHUNK_GDN_H, jobs, targets)
 
     print("=" * 72)

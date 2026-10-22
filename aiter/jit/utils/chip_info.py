@@ -378,6 +378,7 @@ def build_tune_dict(
     tune_dict = dict(default_dict)
     if targets is None:
         targets = get_build_targets()
+        tune_source = None
     filtered = filter_tune_df(tune_df, targets)
     if libtype is not None and "libtype" in tune_df.columns:
         filtered = filtered[filtered["libtype"] == libtype]
@@ -459,6 +460,7 @@ def build_tune_dict_batched(
     tune_dict = dict(default_dict)
     if targets is None:
         targets = get_build_targets()
+        tune_source = None
     filtered = filter_tune_df(tune_df, targets)
     if libtype is not None and "libtype" in tune_df.columns:
         filtered = filtered[filtered["libtype"] == libtype]

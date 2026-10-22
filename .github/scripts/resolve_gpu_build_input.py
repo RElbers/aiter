@@ -27,7 +27,6 @@ def main():
     archs, targets = resolve_input(os.environ["GPU_ARCHS"])
     with open(os.environ["GITHUB_ENV"], "a") as output:
         output.write(f"GPU_ARCHS={archs}\nAITER_BUILD_TARGETS={targets}\n")
-    print(f"Build architectures: {archs}; explicit variants: {targets or '(legacy)'}")
 
 
 if __name__ == "__main__":

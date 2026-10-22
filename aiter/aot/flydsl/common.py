@@ -70,33 +70,30 @@ class AotTargets:
     archs: frozenset[str] | None = None
 
 
-def resolve_aot_targets(build_targets=None) -> AotTargets:
+def resolve_aot_targets(build_targets=None) -> AotTargets | None:
     """Resolve once at the CLI/package boundary, before collecting any jobs."""
     from aiter.jit.utils.build_targets import resolve_build_targets
 
     pairs = resolve_build_targets(build_targets)
+    if pairs is None:
+        return None
+
     arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
     archs = (
         frozenset(a.strip() for a in re.split(r"[;,]", arch) if a.strip())
         if arch
         else None
     )
-    if pairs is not None:
-        destinations = frozenset(gfx for gfx, _ in pairs)
-        if archs and archs != destinations:
-            raise ValueError(
-                f"ARCH/GPU_ARCHS={arch!r} conflicts with build targets {pairs}"
-            )
-        return AotTargets(pairs, destinations)
-    if archs and "native" in archs:
-        from aiter.jit.utils.chip_info import get_gfx_runtime
-
-        archs = (archs - {"native"}) | {get_gfx_runtime()}
-    return AotTargets(archs=archs)
+    destinations = frozenset(gfx for gfx, _ in pairs)
+    if archs and archs != destinations:
+        raise ValueError(
+            f"ARCH/GPU_ARCHS={arch!r} conflicts with build targets {pairs}"
+        )
+    return AotTargets(pairs, destinations)
 
 
 def select_aot_jobs(
-    kind: OpKind, jobs: list[dict[str, Any]], targets: AotTargets
+    kind: OpKind, jobs: list[dict[str, Any]], targets: AotTargets | None
 ) -> list[dict[str, Any]]:
     """Match the actual compiler target and retain architecture-wide jobs.
 
@@ -104,6 +101,9 @@ def select_aot_jobs(
     use CSV gfx/CU metadata, with the existing CU-to-arch fallback for old CSVs.
     Chunk GDN rows without hardware metadata describe portable configurations.
     """
+    if targets is None:
+        return jobs
+
     fixed = kind in {OpKind.MXFP4_MOE, OpKind.MEGA_MOE, OpKind.FMHA_FP8}
     selected = []
     available_archs = set()
@@ -240,7 +240,9 @@ def override_env(var_name: str, value: str | None) -> Iterator[None]:
             os.environ[var_name] = prev
 
 
-def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
+def _collect_aot_jobs_for(
+    kind: OpKind, targets: AotTargets | None
+) -> list[dict[str, Any]]:
     """Load DEFAULT_CSVS + parse_csv for the named kind and return its
     job list. Note: importing .gemm / .moe / .chunk_gdn_h here also
     runs their module-level imports, which pull in FlyDSL (e.g.
@@ -267,6 +269,10 @@ def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
         from .grouped_moe import DEFAULT_CSVS, parse_csv
     elif kind is OpKind.CHUNK_GDN_H:
         from .chunk_gdn_h import DEFAULT_CSVS, parse_csv
+
+        return collect_aot_jobs(
+            DEFAULT_CSVS, lambda path: parse_csv(path, include_gfx=targets is not None)
+        )
     else:
         raise ValueError(f"unknown FlyDSL AOT kind: {kind!r}")
     return collect_aot_jobs(DEFAULT_CSVS, parse_csv)
@@ -509,7 +515,7 @@ def run_aot(cache_dir: str, *, build_targets=None) -> None:
 
     all_jobs: list[tuple[OpKind, dict[str, Any]]] = []
     for kind in OpKind:
-        jobs = _collect_aot_jobs_for(kind)
+        jobs = _collect_aot_jobs_for(kind, targets)
         jobs = select_aot_jobs(kind, jobs, targets)
         for job in jobs:
             all_jobs.append((kind, job))
