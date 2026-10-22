@@ -512,7 +512,7 @@ kernels_by_name = {
 
 
 def __getattr__(name):
-    # Legacy tuning clients import these names; defer hardware resolution until
+    # Existing tuning clients import these names; defer hardware resolution until
     # requested so explicit code generators can import the neutral registry.
     if name == "kernels_list":
         return get_kernel_registry()[0]

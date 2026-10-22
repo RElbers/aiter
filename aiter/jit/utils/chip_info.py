@@ -363,7 +363,7 @@ def build_tune_dict(
                           lookup uses the name instead of kernelId. Falls back to
                           kernelId if the kernelName column is absent from the CSV.
         targets:         Resolved build pairs supplied by an explicit build caller;
-                         None retains legacy target selection.
+                         None retains existing target selection.
         tune_source:     Optional table/backend label for missing-row diagnostics.
 
     Strict on stale tuned-CSV rows: any row whose kernelName (or kernelId, in the
