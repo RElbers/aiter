@@ -1,20 +1,22 @@
 #pragma once
 
-#include <dlfcn.h>
-#include <stdexcept>
-#include <filesystem>
-#include <sstream>
 #include "lru_cache.h"
-#include <memory>
-#include <cstdlib>
-#include <openssl/evp.h>
-#include <iomanip>
-#include <fmt/ranges.h>
-#include <fmt/args.h>
-#include <mutex>
-#include <cctype>
 #include <algorithm>
-
+#include <cctype>
+#include <cstdlib>
+#include <dlfcn.h>
+#include <filesystem>
+#include <fmt/args.h>
+#include <fmt/ranges.h>
+#include <hip/hip_runtime_api.h>
+#include <iomanip>
+#include <memory>
+#include <mutex>
+#include <openssl/evp.h>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <vector>
 
 namespace aiter{
 
@@ -35,11 +37,18 @@ __inline__ void init_lru_cache(std::unique_ptr<LRUCache<K, V>>& lru_cache){
 static std::filesystem::path aiter_root_dir;
 
 __inline__ void init_root_dir(){
-    char* AITER_ROOT_DIR = std::getenv("AITER_ROOT_DIR");
-    if (!AITER_ROOT_DIR){
-        AITER_ROOT_DIR = std::getenv("HOME");
+    const char* root = std::getenv("AITER_ROOT_DIR");
+    if(root)
+    {
+        aiter_root_dir = std::filesystem::absolute(root);
     }
-    aiter_root_dir=std::filesystem::path(AITER_ROOT_DIR)/".aiter";
+    else
+    {
+        const char* home = std::getenv("HOME");
+        if(!home)
+            throw std::runtime_error("HOME or AITER_ROOT_DIR must be set");
+        aiter_root_dir = std::filesystem::path(home) / ".aiter";
+    }
 }
 
 __inline__ std::filesystem::path get_root_dir(){
@@ -47,6 +56,69 @@ __inline__ std::filesystem::path get_root_dir(){
     return aiter_root_dir;
 }
 
+// Keep this layout and compatible-superset selection in sync with utils.py.
+__inline__ std::set<std::string> template_archs()
+{
+    const char* env = std::getenv("GPU_ARCHS");
+    std::stringstream input(env ? env : "native");
+    std::set<std::string> archs;
+    std::string arch;
+    while(std::getline(input, arch, ';'))
+    {
+        arch.erase(std::remove_if(
+                       arch.begin(), arch.end(), [](unsigned char c) { return std::isspace(c); }),
+                   arch.end());
+        arch = arch.substr(0, arch.find(':'));
+        if(arch == "native")
+        {
+            int device;
+            hipDeviceProp_t props;
+            if(hipGetDevice(&device) != hipSuccess ||
+               hipGetDeviceProperties(&props, device) != hipSuccess)
+                throw std::runtime_error("Cannot resolve template execution architecture");
+            arch = std::string(props.gcnArchName);
+            arch = arch.substr(0, arch.find(':'));
+        }
+        if(arch.empty())
+            throw std::runtime_error("Empty template architecture");
+        archs.insert(arch);
+    }
+    if(archs.empty())
+        throw std::runtime_error("No template architectures");
+    return archs;
+}
+
+__inline__ std::filesystem::path template_library_path(const std::string& folder)
+{
+    auto archs = template_archs();
+    std::string key;
+    for(const auto& arch : archs)
+        key += (key.empty() ? "" : "+") + arch;
+    auto root  = get_root_dir() / "build" / "targets";
+    auto exact = root / key / folder / "lib.so";
+    if(std::filesystem::is_regular_file(exact))
+        return exact;
+    if(std::filesystem::is_directory(root))
+    {
+        std::vector<std::filesystem::path> entries;
+        for(const auto& entry : std::filesystem::directory_iterator(root))
+            entries.push_back(entry.path());
+        std::sort(entries.begin(), entries.end());
+        for(const auto& entry : entries)
+        {
+            std::set<std::string> coverage;
+            std::stringstream input(entry.filename().string());
+            std::string arch;
+            while(std::getline(input, arch, '+'))
+                coverage.insert(arch);
+            auto candidate = entry / folder / "lib.so";
+            if(std::includes(coverage.begin(), coverage.end(), archs.begin(), archs.end()) &&
+               std::filesystem::is_regular_file(candidate))
+                return candidate;
+        }
+    }
+    return exact;
+}
 
 __inline__ const std::pair<std::string, int> execute_cmd(const std::string& cmd) {
     std::array<char, 128> buffer;
@@ -129,11 +201,11 @@ static std::unique_ptr<LRUCache<std::string, std::string>> func_names;
 template<typename... Args>
 __inline__ void run_lib(std::string func_name, std::string folder, Args... args) {
     std::call_once(init_libs_lru_cache, init_lru_cache<std::string, std::shared_ptr<SharedLibrary>>, libs);
-    auto func_lib = libs->get(func_name);
+    std::string lib_path = template_library_path(folder).string();
+    auto func_lib        = libs->get(lib_path);
     if(!func_lib){
-        std::string lib_path = (get_root_dir()/"build"/folder/"lib.so").string();
-        libs->put(func_name, std::make_shared<SharedLibrary>(lib_path));
-        func_lib = libs->get(func_name);
+        libs->put(lib_path, std::make_shared<SharedLibrary>(lib_path));
+        func_lib = libs->get(lib_path);
     }
     (*func_lib)->call(func_name, std::forward<Args>(args)...);
 }
@@ -171,7 +243,6 @@ __inline__ std::string get_default_func_name(const std::string& md_name, std::li
 }
 
 
-__inline__ bool not_built(const std::string& folder) {
-    return !std::filesystem::exists(get_root_dir() / "build" / folder / "lib.so");
-}
+__inline__ bool not_built(const std::string& folder)
+{ return !std::filesystem::is_regular_file(template_library_path(folder)); }
 }

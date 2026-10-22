@@ -276,6 +276,7 @@ def stage_blob_sources(
     log_commands=False,
     seed_files=None,
     return_token=False,
+    build_targets: str | None = None,
 ):
     """Run code generators in a stable, recoverable working directory.
 
@@ -322,6 +323,10 @@ def stage_blob_sources(
         _seed_staging_files(staging_dir, seed_files)
 
         output_dir = os.path.join(staging_dir, "")
+        codegen_env = os.environ.copy()
+        if build_targets is not None:
+            codegen_env["AITER_BUILD_TARGETS"] = build_targets
+
         for command in commands:
             if IS_WINDOWS:
                 blob_dir_placeholder = f"AITER_BLOB_DIR_{uuid.uuid4().hex}"
@@ -343,7 +348,7 @@ def stage_blob_sources(
                     subprocess.list2cmdline(args) if IS_WINDOWS else shlex.join(args)
                 )
                 logger.info("exec_blob ---> %s", command_line)
-            subprocess.run(args, check=True)
+            subprocess.run(args, check=True, env=codegen_env)
 
         generated_build_inputs = [
             os.path.join(root, filename)

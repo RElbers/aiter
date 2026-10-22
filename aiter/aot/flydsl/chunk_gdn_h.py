@@ -34,12 +34,15 @@ from typing import Any
 import flydsl.expr as fx
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     collect_aot_jobs,
     compile_only_env,
     cu_num_to_arch,
     job_identity,
     override_env,
+    resolve_aot_targets,
     run_jobs_parallel,
+    select_aot_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.kernels.gdr_prefill import compile_chunk_gated_delta_h
@@ -94,7 +97,7 @@ def _torch_dtype_for_kernel(dtype_str: str):
     return getattr(torch, name)
 
 
-def parse_csv(csv_path: str) -> list[dict[str, Any]]:
+def parse_csv(csv_path: str, *, include_gfx: bool = False) -> list[dict[str, Any]]:
     """Expand opt tuned rows into compile jobs.
 
     Shapes and layout switches come straight from the row -- including the
@@ -164,6 +167,9 @@ def parse_csv(csv_path: str) -> list[dict[str, Any]]:
                     "use_state_indices": use_state_indices,
                     **_FIXED_SWITCHES,
                 }
+                if include_gfx:
+                    job["gfx"] = (row.get("gfx") or "").strip()
+
                 key = job_identity(job)
                 if key in seen:
                     continue
@@ -303,9 +309,9 @@ def _format_shape_str(job: dict) -> str:
     )
 
 
-def compile_one_config(*, cu_num: int = 0, **kwargs) -> dict:
+def compile_one_config(*, cu_num: int = 0, gfx: str = "", **kwargs) -> dict:
     """Compile one opt configuration and save it to cache."""
-    aot_arch = cu_num_to_arch(cu_num, default=CHUNK_GDN_H_AOT_ARCH_DEFAULT)
+    aot_arch = gfx or cu_num_to_arch(cu_num, default=CHUNK_GDN_H_AOT_ARCH_DEFAULT)
     kwargs.pop("kernel_name", None)
     shape_str = _format_shape_str(kwargs)
     result = {
@@ -344,7 +350,11 @@ def main():
         default=DEFAULT_CSVS,
         help="Path(s) to tuned CSV config file(s); defaults come from AITER_CONFIGS",
     )
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_aot_targets(args.build_targets)
 
     csv_paths = [os.path.abspath(p) for p in args.csv]
     for csv_path in csv_paths:
@@ -357,7 +367,10 @@ def main():
     )
     arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS") or "(auto-detect)"
 
-    jobs = collect_aot_jobs(csv_paths, parse_csv)
+    jobs = collect_aot_jobs(
+        csv_paths, lambda path: parse_csv(path, include_gfx=targets is not None)
+    )
+    jobs = select_aot_jobs(OpKind.CHUNK_GDN_H, jobs, targets)
 
     print("=" * 72)
     print("FlyDSL chunk-gated-delta-h opt (K5) AOT Pre-compilation")

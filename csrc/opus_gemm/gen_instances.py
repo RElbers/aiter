@@ -1298,7 +1298,26 @@ if __name__ == "__main__":
         help="[DEPRECATED] alias for --tune_files (single path). Use --tune_files instead.",
     )
 
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    import importlib.util
+
+    utils_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../aiter/jit/utils")
+    )
+    if not os.path.isdir(utils_dir):
+        package = importlib.util.find_spec("aiter")
+        if package is None or not package.submodule_search_locations:
+            raise ImportError("aiter package not found")
+        utils_dir = os.path.join(
+            next(iter(package.submodule_search_locations)), "jit", "utils"
+        )
+    sys.path.insert(0, utils_dir)
+    from build_targets import resolve_build_targets
+
+    build_targets = resolve_build_targets(args.build_targets)
     if args.tune_files is None and args.tune_file is not None:
         args.tune_files = args.tune_file
     TAG_TO_LIST = {
@@ -1401,7 +1420,9 @@ if __name__ == "__main__":
         for a in gpu_archs_env.split(";")
         if a.strip() and a.strip().lower() != "native"
     ]
-    if explicit:
+    if build_targets is not None:
+        target_arches = {gfx for gfx, _ in build_targets}
+    elif explicit:
         target_arches = set(explicit)
     else:
         # GPU_ARCHS=native: probe live GPU; skip filter if rocminfo unavailable.

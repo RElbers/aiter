@@ -23,7 +23,7 @@ on:
         required: true
         default: 'rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1'
       gpu_archs:
-        description: 'GPU architectures (e.g. gfx942;gfx950)'
+        description: 'GPU architectures or explicit gfx:CU pairs (e.g. gfx950:128;gfx950:256)'
         required: false
         default: 'gfx942;gfx950'
       runner:
@@ -78,7 +78,7 @@ on:
         required: false
         default: true
       gpu_archs:
-        description: 'GPU architectures'
+        description: 'GPU architectures or explicit gfx:CU pairs'
         type: string
         required: false
         default: 'gfx942;gfx950'
@@ -193,6 +193,18 @@ jobs:
             echo "No commit input provided, using current commit: $(git rev-parse HEAD)"
           fi
 
+      - name: Resolve GPU build destinations
+        if: ${{ matrix.build_enabled }}
+        run: |
+          if [ -f .github/scripts/resolve_gpu_build_input.py ]; then
+            python3 .github/scripts/resolve_gpu_build_input.py
+          elif [[ "${GPU_ARCHS}" == *:* ]]; then
+            echo "::error::Selected revision ${BUILD_REF} does not support explicit GPU build targets. Use architecture-only gpu_archs or select a newer revision."
+            exit 1
+          else
+            echo "AITER_BUILD_TARGETS=" >> "${GITHUB_ENV}"
+          fi
+
       - name: Sync submodules
         if: ${{ matrix.build_enabled }}
         run: |
@@ -305,6 +317,7 @@ jobs:
             -e SETUPTOOLS_SCM_PRETEND_VERSION="${{ steps.version.outputs.nightly_version }}" \
             -e PREBUILD_KERNELS=1 \
             -e GPU_ARCHS="${{ env.GPU_ARCHS }}" \
+            -e AITER_BUILD_TARGETS="${{ env.AITER_BUILD_TARGETS }}" \
             -w /workspace \
             aiter_build_${{ matrix.python_version }} \
             bash -c "python3 setup.py bdist_wheel && ls dist/*.whl"
@@ -312,6 +325,7 @@ jobs:
             docker exec \
             -e PREBUILD_KERNELS=1 \
             -e GPU_ARCHS="${{ env.GPU_ARCHS }}" \
+            -e AITER_BUILD_TARGETS="${{ env.AITER_BUILD_TARGETS }}" \
             -w /workspace \
             aiter_build_${{ matrix.python_version }} \
             bash -c "python3 setup.py bdist_wheel && ls dist/*.whl"
@@ -412,6 +426,7 @@ jobs:
             -e SETUPTOOLS_SCM_PRETEND_VERSION="${PRETEND_VER}" \
             -e PREBUILD_KERNELS=1 \
             -e GPU_ARCHS="${GPU_ARCHS}" \
+            -e AITER_BUILD_TARGETS="${AITER_BUILD_TARGETS}" \
             -e PYBIN="${PYBIN}" \
             -w /workspace \
             aiter_build_${{ matrix.python_version }} \
