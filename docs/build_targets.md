@@ -98,18 +98,24 @@ legacy template are absent and produce a concrete missing-object error.
 
 ## Programmatic boundary and template cache
 
-Resolve the request at an explicit entry point, before evaluating recipes:
+Resolve the request at an explicit entry point, before evaluating recipes.
+Filter the arguments against the build function's signature: recipes also
+contain metadata such as `is_experimental` that `build_module` does not accept.
 
 ```python
 # As setup.py does, add the checkout's aiter/ directory to sys.path to import
 # build tooling without initializing runtime operators.
+import inspect
+
 from jit import core
 from jit.utils.build_targets import resolve_build_targets
 
-targets = resolve_build_targets('gfx942:304;gfx950:128')
-args = core.get_args_of_build('module_gemm_a8w8', build_targets=targets)
-args.pop('hip_clang_path')
-args['md_name'] = 'module_gemm_a8w8'
+targets = resolve_build_targets("gfx942:304;gfx950:128")
+module = "module_gemm_a8w8"
+args = core.get_args_of_build(module, build_targets=targets)
+args["md_name"] = module
+parameters = inspect.signature(core.build_module).parameters
+args = {key: value for key, value in args.items() if key in parameters}
 core.build_module(**args)
 ```
 

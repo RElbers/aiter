@@ -3,6 +3,7 @@
 """Build a selected module without importing runtime operators or probing a GPU."""
 
 import argparse
+import inspect
 import logging
 import sys
 from pathlib import Path
@@ -31,8 +32,9 @@ def main():
 
     logging.basicConfig(level=logging.INFO)
     build_args = core.get_args_of_build(args.module, build_targets=targets)
-    build_args.pop("hip_clang_path")
     build_args["md_name"] = args.module
+    parameters = inspect.signature(core.build_module).parameters
+    build_args = {key: value for key, value in build_args.items() if key in parameters}
     core.build_module(**build_args)
 
 
