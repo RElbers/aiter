@@ -50,6 +50,7 @@ removed from the artifact.
 | CK Tile MXFP4 MoE | Include its existing gfx950 implementation when requested. This does not add a gfx942 or gfx1250 implementation. |
 | OPUS | Filter by architecture ownership, retaining the mandatory/default compiled kernels and applicable tuned kernels. CU pruning is deliberately not applied. Per-source compiler options survive package prebuilds. |
 | CK Tile attention recipes | Pass the destination families to the upstream generator, including its `gfx9` name for gfx942. |
+| Assembly manifest codegen | Select the requested architecture entries. Existing object availability and runtime guards still apply. |
 | FlyDSL AOT | Package and all AOT CLIs use the same job selector. GEMM, convolution and MoE use job metadata; chunk GDN honors explicit gfx and expands portable jobs. Persistent MXFP4 retains CU specialization. Fixed gfx950 families keep their actual compiler target. |
 
 FlyDSL CLI example (requires the FlyDSL version pinned by this checkout):
