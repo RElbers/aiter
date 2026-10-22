@@ -9,9 +9,11 @@ import enum
 import json
 import multiprocessing
 import os
+import re
 import shutil
 import tempfile
 import time
+import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -60,6 +62,108 @@ _CU_NUM_TO_ARCH = {
 def cu_num_to_arch(cu_num: int, default: str = "gfx950") -> str:
     """Map compute-unit count to GPU architecture string."""
     return _CU_NUM_TO_ARCH.get(cu_num, default)
+
+
+@dataclass(frozen=True)
+class AotTargets:
+    pairs: tuple[tuple[str, int], ...] | None = None
+    archs: frozenset[str] | None = None
+
+
+def resolve_aot_targets(build_targets=None) -> AotTargets:
+    """Resolve once at the CLI/package boundary, before collecting any jobs."""
+    from aiter.jit.utils.build_targets import resolve_build_targets
+
+    pairs = resolve_build_targets(build_targets)
+    arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS")
+    archs = (
+        frozenset(a.strip() for a in re.split(r"[;,]", arch) if a.strip())
+        if arch
+        else None
+    )
+    if pairs is not None:
+        destinations = frozenset(gfx for gfx, _ in pairs)
+        if archs and archs != destinations:
+            raise ValueError(
+                f"ARCH/GPU_ARCHS={arch!r} conflicts with build targets {pairs}"
+            )
+        return AotTargets(pairs, destinations)
+    if archs and "native" in archs:
+        from aiter.jit.utils.chip_info import get_gfx_runtime
+
+        archs = (archs - {"native"}) | {get_gfx_runtime()}
+    return AotTargets(archs=archs)
+
+
+def select_aot_jobs(
+    kind: OpKind, jobs: list[dict[str, Any]], targets: AotTargets
+) -> list[dict[str, Any]]:
+    """Match the actual compiler target and retain architecture-wide jobs.
+
+    Fixed-target families pin their ISA; persistent MXFP4 also specializes CU. Other families
+    use CSV gfx/CU metadata, with the existing CU-to-arch fallback for old CSVs.
+    Chunk GDN rows without hardware metadata describe portable configurations.
+    """
+    fixed = kind in {OpKind.MXFP4_MOE, OpKind.MEGA_MOE, OpKind.FMHA_FP8}
+    selected = []
+    available_archs = set()
+    covered = set()
+    for job in jobs:
+        cu = int(job.get("cu_num", 0) or 0)
+        cu_sensitive = not fixed or (
+            kind is OpKind.MXFP4_MOE and job.get("persist", False)
+        )
+        gfx = job.get("gfx", "")
+        if kind is OpKind.CHUNK_GDN_H and not gfx and not cu and targets.archs:
+            pairs = targets.pairs or tuple((arch, 0) for arch in sorted(targets.archs))
+            selected.extend(dict(job, gfx=arch, cu_num=count) for arch, count in pairs)
+            available_archs.update(targets.archs)
+            covered.update(pairs)
+            continue
+        arch = (
+            "gfx950"
+            if fixed
+            else (
+                gfx or ("gfx1250" if kind is OpKind.GROUPED_MOE else cu_num_to_arch(cu))
+            )
+        )
+        available_archs.add(arch)
+        if targets.archs is not None and arch not in targets.archs:
+            continue
+        if (
+            targets.pairs is not None
+            and cu
+            and cu_sensitive
+            and (arch, cu) not in targets.pairs
+        ):
+            continue
+        selected.append(job)
+        covered.add((arch, cu if cu_sensitive else 0))
+    if targets.pairs:
+        for arch, cu in targets.pairs:
+            if (
+                arch in available_archs
+                and (arch, cu) not in covered
+                and (arch, 0) not in covered
+            ):
+                warnings.warn(
+                    f"FlyDSL {kind.value}: no AOT tuning jobs for {arch}:{cu}; runtime JIT remains available",
+                    stacklevel=2,
+                )
+    return dedupe_jobs(selected)
+
+
+@contextmanager
+def compile_cu_env(cu_num: int) -> Iterator[None]:
+    """Worker-local CU override; clear cached answers on entry and restoration."""
+    from aiter.jit.utils.chip_info import get_cu_num
+
+    with override_env("CU_NUM", str(cu_num) if cu_num > 0 else None):
+        get_cu_num.cache_clear()
+        try:
+            yield
+        finally:
+            get_cu_num.cache_clear()
 
 
 def job_identity(job: dict[str, Any]) -> tuple:
@@ -133,7 +237,7 @@ def override_env(var_name: str, value: str | None) -> Iterator[None]:
             os.environ[var_name] = prev
 
 
-def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
+def _unfiltered_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
     """Load DEFAULT_CSVS + parse_csv for the named kind and return its
     job list. Note: importing .gemm / .moe / .chunk_gdn_h here also
     runs their module-level imports, which pull in FlyDSL (e.g.
@@ -163,6 +267,13 @@ def _collect_aot_jobs_for(kind: OpKind) -> list[dict[str, Any]]:
     else:
         raise ValueError(f"unknown FlyDSL AOT kind: {kind!r}")
     return collect_aot_jobs(DEFAULT_CSVS, parse_csv)
+
+
+def _collect_aot_jobs_for(
+    kind: OpKind, targets: AotTargets | None = None
+) -> list[dict[str, Any]]:
+    targets = targets if targets is not None else resolve_aot_targets()
+    return select_aot_jobs(kind, _unfiltered_aot_jobs_for(kind), targets)
 
 
 def _compile_one_config_for(kind: OpKind) -> Callable[..., dict[str, Any]]:
@@ -395,13 +506,14 @@ def run_jobs_parallel(
     return out
 
 
-def run_aot(cache_dir: str) -> None:
+def run_aot(cache_dir: str, *, build_targets=None) -> None:
+    targets = resolve_aot_targets(build_targets)
     os.makedirs(cache_dir, exist_ok=True)
     os.environ["FLYDSL_RUNTIME_CACHE_DIR"] = cache_dir
 
     all_jobs: list[tuple[OpKind, dict[str, Any]]] = []
     for kind in OpKind:
-        for job in _collect_aot_jobs_for(kind):
+        for job in _collect_aot_jobs_for(kind, targets):
             all_jobs.append((kind, job))
 
     if not all_jobs:

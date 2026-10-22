@@ -463,7 +463,7 @@ if PREBUILD_KERNELS != 0:
                 flydsl_cache_dir = os.path.join(
                     this_dir, "aiter", "jit", "flydsl_cache"
                 )
-                run_aot(flydsl_cache_dir)
+                run_aot(flydsl_cache_dir, build_targets=explicit_targets)
             finally:
                 if _prev_aot_import is None:
                     os.environ.pop("AITER_AOT_IMPORT", None)

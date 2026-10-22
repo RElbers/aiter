@@ -29,12 +29,16 @@ import sys
 import time
 
 from aiter.aot.flydsl.common import (
+    OpKind,
     collect_aot_jobs,
+    compile_cu_env,
     compile_only_env,
     cu_num_to_arch,
     job_identity,
     override_env,
+    resolve_aot_targets,
     run_jobs_parallel,
+    select_aot_jobs,
 )
 from aiter.jit.core import AITER_CONFIGS
 from aiter.ops.flydsl.kernels.tensor_shim import ptr_arg as _ptr_view_safe
@@ -433,11 +437,7 @@ def _precompile_to_cache(
     def _make_a_user(a_dtype_user_shape):
         return _alloc(a_dtype_user_shape, _storage_dtype(a_dtype))
 
-    _cu_num_str = str(cu_num) if cu_num > 0 else None
-    with compile_only_env(), override_env("CU_NUM", _cu_num_str):
-        from aiter.jit.utils.chip_info import get_cu_num
-
-        get_cu_num.cache_clear()
+    with compile_only_env(), compile_cu_env(cu_num):
 
         sorted_token_ids, sorted_expert_ids, num_valid_ids = _make_routing()
 
@@ -1154,7 +1154,11 @@ def main():
         default=DEFAULT_CSVS,
         help="Path(s) to tuned CSV config file(s); defaults come from AITER_CONFIGS",
     )
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
+    targets = resolve_aot_targets(args.build_targets)
 
     csv_paths = [os.path.abspath(p) for p in args.csv]
     for csv_path in csv_paths:
@@ -1168,6 +1172,7 @@ def main():
     arch = os.environ.get("ARCH") or os.environ.get("GPU_ARCHS") or "(auto-detect)"
 
     all_jobs = collect_aot_jobs(csv_paths, parse_csv)
+    all_jobs = select_aot_jobs(OpKind.MOE, all_jobs, targets)
 
     stage1_jobs = [j for j in all_jobs if j["stage"] == 1]
     stage2_jobs = [j for j in all_jobs if j["stage"] == 2]
