@@ -1,4 +1,4 @@
-def _ck_targets_flag() -> str:
+def _ck_targets_flag(build_targets=None) -> str:
     """Return ``--targets <runtime arch>`` when the runtime GPU is not gfx9.
 
     ck-tile's ``generate.py`` defaults to ``--targets gfx9,gfx950``, so any
@@ -6,6 +6,10 @@ def _ck_targets_flag() -> str:
     fails at dispatch with "invalid argument for fmha_fwd". For gfx9 hosts we
     keep the default (covers both gfx942 and gfx950 like before).
     """
+    if build_targets is not None:
+        from build_targets import ck_tile_target_families
+
+        return " --targets " + ck_tile_target_families(build_targets)
     try:
         from chip_info import get_gfx
 
@@ -93,7 +97,7 @@ def _parse_mha_varlen_fwd_md_name(md_name: str):
 
 
 def get_mha_varlen_prebuild_variants_by_names(
-    md_names: list[str], ck_dir: str, receipt: int = 200
+    md_names: list[str], ck_dir: str, receipt: int = 200, *, build_targets=None
 ) -> list[dict]:
     variants: list[dict] = []
     for md_name in md_names:
@@ -120,8 +124,8 @@ def get_mha_varlen_prebuild_variants_by_names(
             has_qscale=has_qscale,
         )
         blob_gen_cmd = [
-            f"{ck_dir}/example/ck_tile/01_fmha/generate.py -d fwd --receipt {receipt} --filter {filter_pattern} --output_dir {{}}{_ck_targets_flag()}",
-            f'{ck_dir}/example/ck_tile/01_fmha/generate.py -d fwd_splitkv --receipt {receipt} --filter " @ " --output_dir {{}}{_ck_targets_flag()}',
+            f"{ck_dir}/example/ck_tile/01_fmha/generate.py -d fwd --receipt {receipt} --filter {filter_pattern} --output_dir {{}}{_ck_targets_flag(build_targets)}",
+            f'{ck_dir}/example/ck_tile/01_fmha/generate.py -d fwd_splitkv --receipt {receipt} --filter " @ " --output_dir {{}}{_ck_targets_flag(build_targets)}',
         ]
         variants.append(
             {"md_name": f"mha_varlen_fwd{suffix}", "blob_gen_cmd": blob_gen_cmd}

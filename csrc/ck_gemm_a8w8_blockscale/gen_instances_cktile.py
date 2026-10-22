@@ -17,6 +17,7 @@ AITER_CORE_DIR = (
     else os.path.abspath(f"{this_dir}/../../aiter/jit/utils")
 )
 sys.path.insert(0, AITER_CORE_DIR)
+from build_targets import resolve_build_targets
 from chip_info import (
     build_tune_dict,
     write_lookup_header,
@@ -25,8 +26,8 @@ from chip_info import (
 from gemm_a8w8_blockscale_cktile_instance import (
     TileKernelInstance,
     candidate_kernels_by_name,
-    candidate_kernels_cktile_dict,
     default_kernels_cktile_dict,
+    get_kernel_registry,
 )
 
 """
@@ -35,7 +36,7 @@ a8w8_blockscale_gemm instance gen for cktile
 
 
 class gemm_a8w8_blockscale_codegen:
-    def __init__(self, working_path: str, istune=False, tune_file=None):
+    def __init__(self, working_path: str, istune=False, tune_file=None, targets=None):
         self.working_path = working_path
         if not os.path.exists(working_path):
             os.makedirs(working_path)
@@ -44,20 +45,46 @@ class gemm_a8w8_blockscale_codegen:
         self.instances_path = os.path.join(working_path, "instances")
         self.istune = istune
         self.tune_file = tune_file
+        self.targets = targets
+        self.candidates = (
+            get_kernel_registry()
+            if targets is None
+            else {
+                kernel.name: kernel
+                for arch in sorted({gfx for gfx, _ in targets})
+                for kernel in get_kernel_registry(arch).values()
+            }
+        )
 
     def get_tune_dict(self, tune_dict_csv: str):
         """
         Get tune dict from csv file
         """
-        if os.path.exists(tune_dict_csv):
+        if not os.path.exists(tune_dict_csv):
+            return default_kernels_cktile_dict
+        df = pd.read_csv(tune_dict_csv)
+        if self.targets is None:
             return build_tune_dict(
-                pd.read_csv(tune_dict_csv),
+                df,
                 default_kernels_cktile_dict,
-                candidate_kernels_cktile_dict,
+                self.candidates,
                 libtype="cktile",
                 kernels_by_name=candidate_kernels_by_name,
             )
-        return default_kernels_cktile_dict
+        result = dict(default_kernels_cktile_dict)
+        for arch in sorted({gfx for gfx, _ in self.targets}):
+            result.update(
+                build_tune_dict(
+                    df,
+                    {},
+                    get_kernel_registry(arch),
+                    libtype="cktile",
+                    kernels_by_name=candidate_kernels_by_name,
+                    targets=tuple(pair for pair in self.targets if pair[0] == arch),
+                    tune_source=tune_dict_csv,
+                )
+            )
+        return result
 
     def gen_cktile_instance(self, k: TileKernelInstance):
         """
@@ -288,13 +315,13 @@ torch::Tensor
         # generate code for cktile
         if self.istune:
             # generate code for default kernels
-            self.gen_code(candidate_kernels_cktile_dict)
+            self.gen_code(self.candidates)
         else:
             # Runtime dispatch is keyed by kernelName from Python-selected tuned
             # rows. Build the full CKTile candidate registry so a newly tuned CSV
             # cannot reference a valid candidate that is absent from the .so.
             runtime_kernels = self.get_tune_dict(self.tune_file)
-            runtime_kernels.update(candidate_kernels_cktile_dict)
+            runtime_kernels.update(self.candidates)
             self.gen_code(runtime_kernels)
 
 
@@ -327,6 +354,12 @@ if __name__ == "__main__":
         "--tune", action="store_true", required=False, help="generated tune instances"
     )
 
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
-    codegen = gemm_a8w8_blockscale_codegen(args.working_path, args.tune, args.tune_file)
+    targets = resolve_build_targets(args.build_targets)
+    codegen = gemm_a8w8_blockscale_codegen(
+        args.working_path, args.tune, args.tune_file, targets=targets
+    )
     codegen.run()

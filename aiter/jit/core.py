@@ -8,6 +8,7 @@ import logging
 import multiprocessing
 import os
 import re
+import shlex
 import shutil
 import sys
 import time
@@ -1684,8 +1685,40 @@ def _get_ck_exclude_modules():
 
 
 # Explicit recipes are enabled as their destination adapters become available.
-_EXPLICIT_BUILD_MODULES = frozenset()
-_EXPLICIT_BUILD_PREFIXES = ()
+_EXPLICIT_BUILD_MODULES = frozenset(
+    [
+        "libmha_bwd",
+        "libmha_fwd",
+        "mha_varlen_fwd",
+        "module_batched_gemm_a8w8",
+        "module_batched_gemm_a8w8_tune",
+        "module_batched_gemm_bf16",
+        "module_batched_gemm_bf16_tune",
+        "module_deepgemm",
+        "module_gemm_a4w4_blockscale",
+        "module_gemm_a4w4_blockscale_tune",
+        "module_gemm_a8w8",
+        "module_gemm_a8w8_blockscale",
+        "module_gemm_a8w8_blockscale_bpreshuffle",
+        "module_gemm_a8w8_blockscale_bpreshuffle_cktile",
+        "module_gemm_a8w8_blockscale_bpreshuffle_cktile_tune",
+        "module_gemm_a8w8_blockscale_bpreshuffle_tune",
+        "module_gemm_a8w8_blockscale_cktile",
+        "module_gemm_a8w8_blockscale_cktile_tune",
+        "module_gemm_a8w8_blockscale_tune",
+        "module_gemm_a8w8_bpreshuffle",
+        "module_gemm_a8w8_bpreshuffle_cktile",
+        "module_gemm_a8w8_bpreshuffle_cktile_tune",
+        "module_gemm_a8w8_bpreshuffle_tune",
+        "module_gemm_a8w8_tune",
+        "module_mha_batch_prefill",
+        "module_mha_fwd",
+        "module_mha_varlen_fwd",
+        "module_moe_ck2stages",
+        "module_moe_cktile2stages",
+    ]
+)
+_EXPLICIT_BUILD_PREFIXES = ("module_moe_ck2stages_", "mha_varlen_fwd_")
 
 
 def _require_explicit_module(module):
@@ -1696,9 +1729,34 @@ def _require_explicit_module(module):
 
 
 def _target_codegen_commands(commands, targets):
-    """Reject generators until their explicit destination adapter is available."""
-    if commands:
-        raise ValueError("Explicit destination code generation is not supported yet")
+    """Adapt only generators that consume destinations; others are target-neutral."""
+    from build_targets import ck_tile_target_families, format_build_targets
+
+    if isinstance(commands, list):
+        return [_target_codegen_commands(cmd, targets) for cmd in commands]
+    if not commands:
+        return commands
+    executable = shlex.split(commands)[0]
+    name = os.path.basename(executable)
+    parent = os.path.basename(os.path.dirname(executable))
+    if name.startswith("gen_instances") and parent in {
+        "ck_gemm_a8w8",
+        "ck_batched_gemm_a8w8",
+        "ck_batched_gemm_bf16",
+        "ck_deepgemm",
+        "ck_gemm_a4w4_blockscale",
+        "ck_gemm_a8w8_blockscale",
+        "ck_gemm_a8w8_blockscale_bpreshuffle",
+        "ck_gemm_a8w8_bpreshuffle",
+        "cktile_gemm_a8w8_bpreshuffle",
+        "ck_gemm_moe_2stages_codegen",
+        "ck_tile_gemm_moe_2stages",
+    }:
+        return (
+            commands + " --build-targets " + shlex.quote(format_build_targets(targets))
+        )
+    if name == "generate.py" and parent == "01_fmha":
+        return commands + " --targets " + ck_tile_target_families(targets)
     return commands
 
 

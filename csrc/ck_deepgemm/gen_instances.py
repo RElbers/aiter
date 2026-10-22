@@ -243,10 +243,14 @@ torch::Tensor
         self.gen_manifest_head(kernels_dict)
 
 
-def get_tune_dict(tune_dict_csv):
+def get_tune_dict(tune_dict_csv, targets=None):
     if os.path.exists(tune_dict_csv):
         return build_tune_dict(
-            pd.read_csv(tune_dict_csv), default_kernels_dict, kernels_list
+            pd.read_csv(tune_dict_csv),
+            default_kernels_dict,
+            kernels_list,
+            targets=targets,
+            tune_source=tune_dict_csv,
         )
     return default_kernels_dict
 
@@ -296,6 +300,9 @@ if __name__ == "__main__":
     #         same: [same as out]"
     # )
 
+    parser.add_argument(
+        "--build-targets", help="gfx:CU pairs; defaults to AITER_BUILD_TARGETS"
+    )
     args = parser.parse_args()
     # TODO: use tune flag.
     codegen = deepgemm_codegen(args.working_path, False)

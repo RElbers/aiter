@@ -357,7 +357,9 @@ if PREBUILD_KERNELS != 0:
         all_opts_args_build = filtered_opts_args_build
 
         if ENABLE_CK and moe_base_args is not None:
-            moe_variants = get_moe_ck2stages_prebuild_variants(core.AITER_CSRC_DIR)
+            moe_variants = get_moe_ck2stages_prebuild_variants(
+                core.AITER_CSRC_DIR, build_targets=explicit_targets
+            )
             for v in moe_variants:
                 all_opts_args_build.append(
                     {
@@ -367,6 +369,7 @@ if PREBUILD_KERNELS != 0:
                         "flags_extra_hip": moe_base_args["flags_extra_hip"],
                         "extra_include": moe_base_args["extra_include"],
                         "blob_gen_cmd": v["blob_gen_cmd"],
+                        "build_targets": explicit_targets,
                         "third_party": moe_base_args["third_party"],
                     }
                 )
@@ -381,7 +384,9 @@ if PREBUILD_KERNELS != 0:
                 "mha_varlen_fwd_bf16_nlogits_nbias_mask_lse_ndropout_skip_nqscale",
                 "mha_varlen_fwd_bf16_nlogits_nbias_nmask_lse_ndropout_skip_nqscale",
             ]
-            variants = get_mha_varlen_prebuild_variants_by_names(req_md_names, ck_dir)
+            variants = get_mha_varlen_prebuild_variants_by_names(
+                req_md_names, ck_dir, build_targets=explicit_targets
+            )
             base_args = core.get_args_of_build(
                 "module_mha_varlen_fwd", build_targets=explicit_targets
             )
@@ -396,6 +401,7 @@ if PREBUILD_KERNELS != 0:
                         "flags_extra_hip": base_args["flags_extra_hip"],
                         "extra_include": base_args["extra_include"],
                         "blob_gen_cmd": v["blob_gen_cmd"],
+                        "build_targets": explicit_targets,
                         "third_party": base_args["third_party"],
                     }
                 )
