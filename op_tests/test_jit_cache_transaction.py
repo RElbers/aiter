@@ -107,8 +107,9 @@ class TestJitCacheTransaction(unittest.TestCase):
                 '-d fwd --receipt 100 --filter " @ " --output_dir {}'
             )
 
-            def run(args, check):
+            def run(args, check, env):
                 self.assertTrue(check)
+                self.assertNotIn("AITER_BUILD_TARGETS", env)
                 output_dir = args[args.index("--output_dir") + 1]
                 _write(os.path.join(output_dir, "generated.cpp"), "// generated\n")
 
@@ -143,8 +144,9 @@ class TestJitCacheTransaction(unittest.TestCase):
             op_dir = os.path.join(tmp, "work tree", "module")
             command = r'"C:\Work Tree\generator.py" {}'
 
-            def run(args, check):
+            def run(args, check, env):
                 self.assertTrue(check)
+                self.assertNotIn("AITER_BUILD_TARGETS", env)
                 _write(os.path.join(args[2], "generated.cpp"), "// generated\n")
 
             with (
@@ -167,8 +169,9 @@ class TestJitCacheTransaction(unittest.TestCase):
             op_dir = os.path.join(tmp, "work tree", "module")
             command = r'"C:\Work Tree\generator.py" {0} --again {0} --literal {{}}'
 
-            def run(args, check):
+            def run(args, check, env):
                 self.assertTrue(check)
+                self.assertNotIn("AITER_BUILD_TARGETS", env)
                 _write(os.path.join(args[2], "generated.cpp"), "// generated\n")
 
             with (
@@ -204,8 +207,9 @@ class TestJitCacheTransaction(unittest.TestCase):
                 r"--output_dir {}"
             )
 
-            def run(args, check):
+            def run(args, check, env):
                 self.assertTrue(check)
+                self.assertNotIn("AITER_BUILD_TARGETS", env)
                 output_dir = args[args.index("--output_dir") + 1]
                 _write(os.path.join(output_dir, "generated.cpp"), "// generated\n")
 
