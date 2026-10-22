@@ -21,7 +21,15 @@ import sys
 import time
 from contextlib import nullcontext
 
-from aiter.aot.flydsl.common import collect_aot_jobs, compile_only_env, override_env
+from aiter.aot.flydsl.common import (
+    OpKind,
+    cli_requested_archs,
+    collect_aot_jobs,
+    compile_only_env,
+    job_arch,
+    override_env,
+    select_target_jobs,
+)
 from aiter.jit.core import AITER_CONFIGS, AITER_ROOT_DIR
 
 _MODEL_CONFIG_DIR = f"{AITER_ROOT_DIR}/aiter/configs/model_configs"
@@ -483,6 +491,7 @@ def _compile_v2_stage2(job):
 
 
 def compile_one_config(**job):
+    aot_arch = job_arch(OpKind.MXFP4_MOE)
     stage = job["stage"]
     shape_str = (
         f"{job['kernel_name']} NE={job['NE']} D_INTER={job['D_INTER']} BM={job['BM']}"
@@ -496,7 +505,7 @@ def compile_one_config(**job):
         # mxfp4 a4w4 kernels are gfx950-only. In the GPU-free AOT build,
         # get_rocm_arch() detects gfx942 and the gfx950 intrinsics fail to
         # select (LLVM aborts), so pin FLYDSL_GPU_ARCH=gfx950.
-        with compile_only_env(), override_env("FLYDSL_GPU_ARCH", "gfx950"):
+        with compile_only_env(), override_env("FLYDSL_GPU_ARCH", aot_arch):
             if stage == 1:
                 _compile_stage1(job)
             elif job.get("v2_stage2"):
@@ -546,7 +555,9 @@ def main():
         print("Error: no fp4 tuned CSVs found and none given via --csv")
         sys.exit(1)
 
-    all_jobs = collect_aot_jobs(csv_paths, parse_csv)
+    all_jobs = select_target_jobs(
+        OpKind.MXFP4_MOE, collect_aot_jobs(csv_paths, parse_csv), cli_requested_archs()
+    )
     stage1_jobs = [j for j in all_jobs if j["stage"] == 1]
     stage2_jobs = [j for j in all_jobs if j["stage"] == 2]
 
