@@ -97,17 +97,17 @@ def resolve_build_targets(
         return None
 
     targets = parse_build_targets(value)
-    legacy_archs = os.getenv("GPU_ARCHS", "").strip()
-    if legacy_archs and set(_parse_gpu_archs_env(legacy_archs)) != {
+    gpu_archs_env = os.getenv("GPU_ARCHS", "").strip()
+    if gpu_archs_env and set(_parse_gpu_archs_env(gpu_archs_env)) != {
         gfx for gfx, _ in targets
     }:
         raise ValueError(
-            f"GPU_ARCHS={legacy_archs!r} conflicts with explicit build targets {targets}"
+            f"GPU_ARCHS={gpu_archs_env!r} conflicts with explicit build targets {targets}"
         )
-    legacy_cu = os.getenv("CU_NUM", "").strip()
-    if legacy_cu and {int(legacy_cu)} != {cu for _, cu in targets}:
+    cu_num_env = os.getenv("CU_NUM", "").strip()
+    if cu_num_env and {int(cu_num_env)} != {cu for _, cu in targets}:
         raise ValueError(
-            f"CU_NUM={legacy_cu!r} conflicts with explicit build targets {targets}"
+            f"CU_NUM={cu_num_env!r} conflicts with explicit build targets {targets}"
         )
 
     return targets

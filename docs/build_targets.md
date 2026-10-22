@@ -38,16 +38,20 @@ Several CU variants of one architecture share the same candidate table.
 
 ## Input and compatibility
 
-The syntax is semicolon-separated `gfx:positive_cu_count` pairs. Supported names
-are gfx942, gfx950 and gfx1250. Names and whitespace are normalized, duplicates
-removed, and order canonicalized. This list does not extend any backend's
-hardware support. Bare architectures, `native`, wildcards, and comma-separated
-pairs are not part of the new syntax. Unset or blank retains legacy behavior.
+The syntax is semicolon-separated `gfx:positive_cu_count` pairs. Architecture
+names are validated against `GFX_CU_NUM_MAP` in `aiter/jit/utils/build_targets.py`,
+including gfx942, gfx950, gfx1250 and the listed Radeon architectures. Names and
+whitespace are normalized, duplicates removed, and order canonicalized. Parser
+acceptance does not extend any backend's hardware support. Bare architectures,
+`native`, wildcards, and comma-separated pairs are not part of the new syntax.
+Unset or blank keeps the existing `GPU_ARCHS`/`CU_NUM` and hardware-detection
+behavior.
 
-Existing `GPU_ARCHS` and `CU_NUM` retain their syntax and behavior. When supplied
-alongside explicit pairs, their architecture set and scalar CU count must agree
-with the request. Otherwise the entry point reports a conflict without changing
-the caller's environment. Leave `CU_NUM` unset when requesting different counts.
+`GPU_ARCHS` and `CU_NUM` remain supported configuration inputs with their existing
+syntax and behavior. When supplied alongside explicit pairs, their architecture
+set and scalar CU count must agree with the request. Otherwise the entry point
+reports a conflict without changing the caller's environment. Leave `CU_NUM`
+unset when requesting different counts.
 
 Each instruction-set architecture appears once in the compiler flags. CU count
 selects tuning rows or compile-time specialization only where the backend uses
@@ -75,10 +79,10 @@ AITER_AOT_IMPORT=1 python -m aiter.aot.flydsl.gemm \
   --build-targets 'gfx950:128;gfx950:256' --csv /path/to/tuned.csv
 ```
 
-Legacy FlyDSL `ARCH`/`GPU_ARCHS` filtering now applies consistently to package
+FlyDSL `ARCH`/`GPU_ARCHS` filtering now applies consistently to package
 builds and CLIs. `native` is resolved once to the detected architecture before
 selection, fixing the previous literal-string filter. The compiler still uses
-the job's destination, including the legacy CU-to-architecture fallback for old
+the job's destination, including the CU-to-architecture fallback for older
 rows without gfx metadata. MoE workers clear cached CU answers both when entering
 and when leaving a compilation override.
 

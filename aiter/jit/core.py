@@ -22,6 +22,7 @@ from packaging.version import Version, parse
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, f"{this_dir}/utils/")
+from build_targets import BuildTargets, format_build_targets, resolve_build_targets
 from chip_info import (
     _detect_native,
     get_gfx,
@@ -1294,16 +1295,16 @@ def build_module(
     hipify=False,
     flags_extra_hip_per_source=None,
     build_after_wait=False,
-    build_targets=None,
+    build_targets: str | BuildTargets | None = None,
 ):
     if build_targets is not None:
-        from build_targets import format_build_targets, resolve_build_targets
-
         build_targets = resolve_build_targets(build_targets)
         if build_targets is None:
             raise ValueError(
-                "Pass None, rather than a blank request, for a legacy runtime build"
+                "Pass None, rather than a blank request, "
+                "for a build without explicit targets"
             )
+
         logger.info(
             "Explicit build of %s for %s", md_name, format_build_targets(build_targets)
         )
@@ -1390,29 +1391,22 @@ def build_module(
             ]
         if hip_version > Version("6.2.41133"):
             flags_hip += ["-mllvm -amdgpu-coerce-illegal-types=1"]
-        archs = (
-            sorted({gfx for gfx, _ in build_targets})
-            if build_targets is not None
-            else validate_and_update_archs()
-        )
-        needs_fp4 = (
-            any(gfx != "gfx942" for gfx in archs)
-            if build_targets is not None
-            else get_gfx() != "gfx942"
-        )
+        if build_targets is not None:
+            archs = sorted({gfx for gfx, _ in build_targets})
+            needs_fp4 = any(gfx != "gfx942" for gfx in archs)
+            needs_cluster_launch = "gfx1250" in archs
+        else:
+            archs = validate_and_update_archs()
+            gfx = get_gfx()
+            needs_fp4 = gfx != "gfx942"
+            needs_cluster_launch = gfx == "gfx1250" or "gfx1250" in os.environ.get(
+                "GPU_ARCHS", ""
+            )
+
         if needs_fp4 and int(os.getenv("AITER_FP4x2", "1")) > 0:
             flags_hip += ["-D__Float4_e2m1fn_x2"]
-        # Cluster launch is a HOST-side API question (hipDrvLaunchKernelEx +
-        # HIP_LAUNCH_CONFIG appear in ROCm 7.0), not a question about which GPU
-        # this machine has -- so the arch test must accept a cross-compile for
-        # gfx1250 the way the gfx1250 flags in optCompilerConfig.json already do.
-        # Explicit requests use destination architectures; legacy builds retain
-        # their GPU_ARCHS-aware feature checks.
-        needs_cluster_launch = (
-            "gfx1250" in archs
-            if build_targets is not None
-            else get_gfx() == "gfx1250" or "gfx1250" in os.environ.get("GPU_ARCHS", "")
-        )
+        # gfx1250 cluster launches require the HIP host APIs introduced in
+        # ROCm 7.0, including hipDrvLaunchKernelEx and HIP_LAUNCH_CONFIG.
         if needs_cluster_launch and hip_version >= Version("7.0.0"):
             flags_hip += ["-DAITER_ENABLE_CLUSTER_LAUNCH"]
 
@@ -1683,9 +1677,9 @@ def _get_ck_exclude_modules():
     return ck_modules
 
 
-def _target_codegen_commands(commands, targets):
+def _target_codegen_commands(commands, targets: BuildTargets):
     """Adapt only generators that consume destinations; others are target-neutral."""
-    from build_targets import ck_tile_target_families, format_build_targets
+    from build_targets import ck_tile_target_families
 
     if isinstance(commands, list):
         return [_target_codegen_commands(cmd, targets) for cmd in commands]
@@ -1720,17 +1714,17 @@ def _target_codegen_commands(commands, targets):
     return commands
 
 
-def get_args_of_build(ops_name: str, exclude=None, *, build_targets=None):
+def get_args_of_build(
+    ops_name: str, exclude=None, *, build_targets: str | BuildTargets | None = None
+):
     if build_targets is not None:
-        from build_targets import resolve_build_targets
-
         build_targets = resolve_build_targets(build_targets)
         if build_targets is None:
             raise ValueError(
                 "An explicit build request must contain at least one target"
             )
 
-    def build_for_arch(arch):
+    def build_for_arch(arch: str) -> bool:
         if build_targets is not None:
             return any(gfx == arch for gfx, _ in build_targets)
         return get_gfx() == arch or arch in os.environ.get("GPU_ARCHS", "")
@@ -1760,6 +1754,7 @@ def get_args_of_build(ops_name: str, exclude=None, *, build_targets=None):
     }
 
     def convert(d_ops: dict):
+        recipe_context = {"build_for_arch": build_for_arch}
         for k, val in d_ops.items():
             # `flags_extra_hip_per_source` is a dict-valued field
             # whose string elements are plain compile flags (no env-var
@@ -1770,19 +1765,13 @@ def get_args_of_build(ops_name: str, exclude=None, *, build_targets=None):
                 for idx, el in enumerate(val):
                     if isinstance(el, str):
                         if "torch" in el:
-                            # Bound solely for the eval() below: these config
-                            # strings can reference torch (e.g.
-                            # torch.utils.cmake_prefix_path). Static analysis
-                            # cannot see that use, hence the noqa.
-                            import torch  # noqa: F401
-                        val[idx] = eval(
-                            el, globals(), dict(locals(), build_for_arch=build_for_arch)
-                        )
+                            import torch
+
+                            recipe_context["torch"] = torch
+                        val[idx] = eval(el, globals(), recipe_context)
                 d_ops[k] = val
             elif isinstance(val, str):
-                d_ops[k] = eval(
-                    val, globals(), dict(locals(), build_for_arch=build_for_arch)
-                )
+                d_ops[k] = eval(val, globals(), recipe_context)
             else:
                 pass
 
