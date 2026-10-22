@@ -8,7 +8,6 @@ import logging
 import multiprocessing
 import os
 import re
-import shlex
 import shutil
 import sys
 import time
@@ -39,6 +38,7 @@ from jit_cache import (
     snapshot_compiled_kids,
     stage_blob_sources,
 )
+from mha_recipes import get_mha_target_flags
 from torch_guard import torch_compile_guard
 
 AITER_REBUILD = int(os.environ.get("AITER_REBUILD", "0"))
@@ -960,9 +960,12 @@ def rename_cpp_to_cu(els, dst, hipify, recursive=False):
 
 
 def _stage_blob_sources(
-    blob_gen_cmd, op_dir, src_dir, sources, hipify, seed_files=None
+    blob_gen_cmd, op_dir, src_dir, sources, hipify, seed_files=None, build_targets=None
 ):
     """Generate JIT sources in a deterministic transactional working tree."""
+    target_text = (
+        format_build_targets(build_targets) if build_targets is not None else None
+    )
     staging_dir, token = stage_blob_sources(
         blob_gen_cmd,
         op_dir,
@@ -971,6 +974,7 @@ def _stage_blob_sources(
         log_commands=AITER_LOG_MORE > 0,
         seed_files=seed_files,
         return_token=True,
+        build_targets=target_text,
     )
     if staging_dir is None:
         return sources, None, None
@@ -1308,7 +1312,6 @@ def build_module(
         logger.info(
             "Explicit build of %s for %s", md_name, format_build_targets(build_targets)
         )
-        blob_gen_cmd = _target_codegen_commands(blob_gen_cmd, build_targets)
         build_after_wait = True
 
     os.makedirs(bd_dir, exist_ok=True)
@@ -1464,6 +1467,7 @@ def build_module(
                 sources,
                 hipify,
                 seed_files=seed_files,
+                build_targets=build_targets,
             )
             if staged_blob_dir is not None and md_name == "module_deepgemm_opus":
                 compiled_kids_snapshot = snapshot_compiled_kids(
@@ -1677,52 +1681,18 @@ def _get_ck_exclude_modules():
     return ck_modules
 
 
-def _target_codegen_commands(commands, targets: BuildTargets):
-    """Adapt only generators that consume destinations; others are target-neutral."""
-    from build_targets import ck_tile_target_families
-
-    if isinstance(commands, list):
-        return [_target_codegen_commands(cmd, targets) for cmd in commands]
-    if not commands:
-        return commands
-    executable = shlex.split(commands)[0]
-    name = os.path.basename(executable)
-    parent = os.path.basename(os.path.dirname(executable))
-    if (
-        name.startswith("gen_instances")
-        and parent
-        in {
-            "ck_gemm_a8w8",
-            "ck_batched_gemm_a8w8",
-            "ck_batched_gemm_bf16",
-            "ck_deepgemm",
-            "ck_gemm_a4w4_blockscale",
-            "ck_gemm_a8w8_blockscale",
-            "ck_gemm_a8w8_blockscale_bpreshuffle",
-            "ck_gemm_a8w8_bpreshuffle",
-            "cktile_gemm_a8w8_bpreshuffle",
-            "ck_gemm_moe_2stages_codegen",
-            "ck_tile_gemm_moe_2stages",
-            "opus_gemm",
-        }
-    ) or (name == "codegen.py" and parent == "hsa"):
-        return (
-            commands + " --build-targets " + shlex.quote(format_build_targets(targets))
-        )
-    if name == "generate.py" and parent == "01_fmha":
-        return commands + " --targets " + ck_tile_target_families(targets)
-    return commands
-
-
 def get_args_of_build(
     ops_name: str, exclude=None, *, build_targets: str | BuildTargets | None = None
 ):
+    mha_target_flags = ""
     if build_targets is not None:
         build_targets = resolve_build_targets(build_targets)
         if build_targets is None:
             raise ValueError(
                 "An explicit build request must contain at least one target"
             )
+
+        mha_target_flags = get_mha_target_flags(build_targets)
 
     def build_for_arch(arch: str) -> bool:
         if build_targets is not None:
@@ -1754,7 +1724,10 @@ def get_args_of_build(
     }
 
     def convert(d_ops: dict):
-        recipe_context = {"build_for_arch": build_for_arch}
+        recipe_context = {
+            "build_for_arch": build_for_arch,
+            "mha_target_flags": mha_target_flags,
+        }
         for k, val in d_ops.items():
             # `flags_extra_hip_per_source` is a dict-valued field
             # whose string elements are plain compile flags (no env-var

@@ -124,9 +124,16 @@ core.build_module(**args)
 ```
 
 Shared build functions receive immutable pairs and never read
-`AITER_BUILD_TARGETS` implicitly. Destination-aware codegen receives explicit
-CLI arguments. Runtime JIT children omit the inherited variable, even when it
-contains an invalid request. Parallel builds keep their requests local.
+`AITER_BUILD_TARGETS` implicitly. `build_module` uses the request for compiler
+architecture selection and passes its normalized value as `AITER_BUILD_TARGETS`
+in each generator's subprocess environment. The parent environment is unchanged.
+Runtime JIT children omit the inherited variable, even when it contains an
+invalid request. Parallel builds keep their requests local.
+
+CK FMHA's upstream generator uses `--targets` instead. `get_args_of_build` and
+the dynamic attention recipe builder include that argument in their commands.
+Callers constructing custom commands for generators that do not understand
+`AITER_BUILD_TARGETS` must supply those generators' target arguments themselves.
 
 `csrc.cpp_itfs.utils.compile_template_op` and `compile_lib` accept the same
 `build_targets` keyword. Their runtime callers omit it. Template artifacts live

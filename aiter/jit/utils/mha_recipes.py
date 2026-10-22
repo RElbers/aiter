@@ -1,23 +1,22 @@
-def _ck_targets_flag(build_targets=None) -> str:
-    """Return ``--targets <runtime arch>`` when the runtime GPU is not gfx9.
-
-    ck-tile's ``generate.py`` defaults to ``--targets gfx9,gfx950``, so any
-    non-gfx9 host (gfx10/11/12) ends up with an empty kernel set and ``mha_fwd``
-    fails at dispatch with "invalid argument for fmha_fwd". For gfx9 hosts we
-    keep the default (covers both gfx942 and gfx950 like before).
-    """
+def get_mha_target_flags(build_targets=None) -> str:
+    """Use CK FMHA's target names, preserving its defaults on gfx9 runtime builds."""
     if build_targets is not None:
-        from build_targets import ck_tile_target_families
+        # CK FMHA calls gfx942's target family gfx9.
+        families = sorted(
+            {"gfx9" if gfx == "gfx942" else gfx for gfx, _ in build_targets}
+        )
+        return " --targets " + ",".join(families)
 
-        return " --targets " + ck_tile_target_families(build_targets)
     try:
         from chip_info import get_gfx
 
         gfx = get_gfx()
     except Exception:  # noqa: BLE001
         return ""
+
     if gfx.startswith("gfx9"):
         return ""
+
     return f" --targets {gfx}"
 
 
@@ -123,9 +122,10 @@ def get_mha_varlen_prebuild_variants_by_names(
             skip_zero=skip_zero,
             has_qscale=has_qscale,
         )
+        target_flags = get_mha_target_flags(build_targets)
         blob_gen_cmd = [
-            f"{ck_dir}/example/ck_tile/01_fmha/generate.py -d fwd --receipt {receipt} --filter {filter_pattern} --output_dir {{}}{_ck_targets_flag(build_targets)}",
-            f'{ck_dir}/example/ck_tile/01_fmha/generate.py -d fwd_splitkv --receipt {receipt} --filter " @ " --output_dir {{}}{_ck_targets_flag(build_targets)}',
+            f"{ck_dir}/example/ck_tile/01_fmha/generate.py -d fwd --receipt {receipt} --filter {filter_pattern} --output_dir {{}}{target_flags}",
+            f'{ck_dir}/example/ck_tile/01_fmha/generate.py -d fwd_splitkv --receipt {receipt} --filter " @ " --output_dir {{}}{target_flags}',
         ]
         variants.append(
             {"md_name": f"mha_varlen_fwd{suffix}", "blob_gen_cmd": blob_gen_cmd}

@@ -276,6 +276,7 @@ def stage_blob_sources(
     log_commands=False,
     seed_files=None,
     return_token=False,
+    build_targets: str | None = None,
 ):
     """Run code generators in a stable, recoverable working directory.
 
@@ -322,10 +323,13 @@ def stage_blob_sources(
         _seed_staging_files(staging_dir, seed_files)
 
         output_dir = os.path.join(staging_dir, "")
-        # Explicit builds pass their request as codegen arguments. A runtime JIT
-        # child must not activate a build-only request left in the caller's shell.
+        # Only this build's request may reach the generator, never an inherited
+        # request left in a runtime caller's shell.
         codegen_env = os.environ.copy()
         codegen_env.pop("AITER_BUILD_TARGETS", None)
+        if build_targets is not None:
+            codegen_env["AITER_BUILD_TARGETS"] = build_targets
+
         for command in commands:
             if IS_WINDOWS:
                 blob_dir_placeholder = f"AITER_BLOB_DIR_{uuid.uuid4().hex}"
@@ -346,7 +350,14 @@ def stage_blob_sources(
                 command_line = (
                     subprocess.list2cmdline(args) if IS_WINDOWS else shlex.join(args)
                 )
-                logger.info("exec_blob ---> %s", command_line)
+                if build_targets is not None:
+                    logger.info(
+                        "exec_blob [AITER_BUILD_TARGETS=%s] ---> %s",
+                        build_targets,
+                        command_line,
+                    )
+                else:
+                    logger.info("exec_blob ---> %s", command_line)
             subprocess.run(args, check=True, env=codegen_env)
 
         generated_build_inputs = [

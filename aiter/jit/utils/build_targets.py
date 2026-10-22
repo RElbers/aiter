@@ -132,11 +132,6 @@ def torch_processor_count_to_cu(gfx: str, processor_count: int) -> int:
     return processor_count
 
 
-def ck_tile_target_families(targets: BuildTargets) -> str:
-    """CK Tile generator --targets value; gfx9 is its family name for gfx942."""
-    return ",".join(sorted({"gfx9" if gfx == "gfx942" else gfx for gfx, _ in targets}))
-
-
 def _parse_gpu_archs_env(gfx_env: str) -> list[str]:
     """Split a GPU_ARCHS string into a list of non-empty architecture names.
 
