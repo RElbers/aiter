@@ -303,11 +303,6 @@ if PREBUILD_KERNELS != 0:
     from jit.utils.build_targets import resolve_build_targets
 
     explicit_targets = resolve_build_targets()
-    if explicit_targets is not None and not PREBUILD_MODULES:
-        raise ValueError(
-            "Full-package explicit builds are not yet supported; select adapted "
-            "native modules with PREBUILD_MODULES"
-        )
     if explicit_targets is not None and PRETUNE_MODULES:
         raise ValueError(
             "Run live-GPU pretuning separately from an explicit cross-build"

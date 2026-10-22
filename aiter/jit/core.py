@@ -1304,7 +1304,6 @@ def build_module(
             raise ValueError(
                 "Pass None, rather than a blank request, for a legacy runtime build"
             )
-        _require_explicit_module(md_name)
         logger.info(
             "Explicit build of %s for %s", md_name, format_build_targets(build_targets)
         )
@@ -1684,79 +1683,6 @@ def _get_ck_exclude_modules():
     return ck_modules
 
 
-# Explicit recipes are enabled as their destination adapters become available.
-_EXPLICIT_BUILD_MODULES = frozenset(
-    [
-        "libmha_bwd",
-        "libmha_fwd",
-        "mha_varlen_fwd",
-        "module_attention_asm",
-        "module_attention_ps_reduce_asm",
-        "module_batched_gemm_a8w8",
-        "module_batched_gemm_a8w8_tune",
-        "module_batched_gemm_bf16",
-        "module_batched_gemm_bf16_tune",
-        "module_deepgemm",
-        "module_deepgemm_opus",
-        "module_f4gemm_asm",
-        "module_fmha_fwd_mxfp8_asm",
-        "module_fmha_fwd_with_sink_asm",
-        "module_fmha_fwd_with_sink_varlen_asm",
-        "module_fmha_v3_bwd",
-        "module_fmha_v3_fwd",
-        "module_fmha_v3_varlen_bwd",
-        "module_fmha_v3_varlen_fwd",
-        "module_fmha_v4_fwd",
-        "module_gemm_a16w16_asm",
-        "module_gemm_a16w8_asm",
-        "module_gemm_a4w4_asm",
-        "module_gemm_a4w4_blockscale",
-        "module_gemm_a4w4_blockscale_tune",
-        "module_gemm_a4w6_asm",
-        "module_gemm_a6w4_asm",
-        "module_gemm_a6w6_asm",
-        "module_gemm_a8w8",
-        "module_gemm_a8w8_asm",
-        "module_gemm_a8w8_blockscale",
-        "module_gemm_a8w8_blockscale_bpreshuffle",
-        "module_gemm_a8w8_blockscale_bpreshuffle_asm",
-        "module_gemm_a8w8_blockscale_bpreshuffle_cktile",
-        "module_gemm_a8w8_blockscale_bpreshuffle_cktile_tune",
-        "module_gemm_a8w8_blockscale_bpreshuffle_tune",
-        "module_gemm_a8w8_blockscale_cktile",
-        "module_gemm_a8w8_blockscale_cktile_tune",
-        "module_gemm_a8w8_blockscale_tune",
-        "module_gemm_a8w8_bpreshuffle",
-        "module_gemm_a8w8_bpreshuffle_cktile",
-        "module_gemm_a8w8_bpreshuffle_cktile_tune",
-        "module_gemm_a8w8_bpreshuffle_tune",
-        "module_gemm_a8w8_tune",
-        "module_mha_batch_prefill",
-        "module_mha_bwd",
-        "module_mha_fwd",
-        "module_mha_varlen_bwd",
-        "module_mha_varlen_fwd",
-        "module_mla_asm",
-        "module_mla_sparse_prefill_asm",
-        "module_moe_ck2stages",
-        "module_moe_cktile2stages",
-        "module_moe_fmoe_asm",
-        "module_moe_topksoftmax_asm",
-        "module_mxfp8fp4gemm_asm",
-        "module_pa_decode_bf16_asm",
-        "module_pa_mqa_logits_mxfp4_opus",
-    ]
-)
-_EXPLICIT_BUILD_PREFIXES = ("module_moe_ck2stages_", "mha_varlen_fwd_")
-
-
-def _require_explicit_module(module):
-    if module not in _EXPLICIT_BUILD_MODULES and not any(
-        module.startswith(prefix) for prefix in _EXPLICIT_BUILD_PREFIXES
-    ):
-        raise ValueError(f"Explicit build targets are not yet supported for {module!r}")
-
-
 def _target_codegen_commands(commands, targets):
     """Adapt only generators that consume destinations; others are target-neutral."""
     from build_targets import ck_tile_target_families, format_build_targets
@@ -1803,8 +1729,6 @@ def get_args_of_build(ops_name: str, exclude=None, *, build_targets=None):
             raise ValueError(
                 "An explicit build request must contain at least one target"
             )
-
-        _require_explicit_module(ops_name)
 
     def build_for_arch(arch):
         if build_targets is not None:
