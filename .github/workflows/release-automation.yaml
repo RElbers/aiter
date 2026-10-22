@@ -40,9 +40,6 @@ permissions:
   contents: read
   actions: read
 
-env:
-  GPU_BUILD_INPUT: ${{ github.event.inputs.gpu_archs || 'gfx942;gfx950' }}
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.inputs.release_tag || github.ref_name || 'scheduled' }}
   cancel-in-progress: false
@@ -350,7 +347,7 @@ jobs:
             echo
             echo "## Wheels"
             echo
-            echo "Prebuilt manylinux_2_28 wheels, \`build destinations: ${GPU_BUILD_INPUT}\`:"
+            echo "Prebuilt manylinux_2_28 wheels, \`GPU_ARCHS=gfx942;gfx950\`:"
             echo "- ROCm 7.0 / 7.1 / 7.2 x cp310 / cp312 (${EXPECTED_WHEEL_COUNT} wheels)"
             echo
             echo "Wheel assets are uploaded after the release page is created."
@@ -455,7 +452,7 @@ jobs:
               "",
               "## Wheels",
               "",
-              f"Prebuilt manylinux_2_28 wheels, build destinations: `{os.environ['GPU_BUILD_INPUT']}`:",
+              "Prebuilt manylinux_2_28 wheels, `GPU_ARCHS=gfx942;gfx950`:",
               "",
               "| ROCm | Python | Wheel |",
               "|---|---|---|",
