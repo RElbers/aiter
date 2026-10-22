@@ -28,9 +28,6 @@ FLYDSL_VERSION = "flydsl==0.4.0"
 
 BUILD_TARGET = os.environ.get("BUILD_TARGET", "auto")
 PREBUILD_KERNELS = int(os.environ.get("PREBUILD_KERNELS", "0"))
-PREBUILD_MODULES = [
-    m.strip() for m in os.getenv("PREBUILD_MODULES", "").split(";") if m.strip()
-]
 # Opt-in: tag a wheel without compiled modules py3-none (see
 # _python_agnostic_bdist_wheel). Unset, wheels are tagged as before.
 AITER_PY3_WHEEL = os.environ.get("AITER_PY3_WHEEL", "0") == "1"
@@ -324,23 +321,10 @@ if PREBUILD_KERNELS != 0:
         )
         from jit.utils.moe_recipes import get_moe_ck2stages_prebuild_variants
 
-        if PREBUILD_MODULES:
-            all_opts_args_build = []
-            for module in PREBUILD_MODULES:
-                build_args = core.get_args_of_build(
-                    module, build_targets=explicit_targets
-                )
-                if not build_args["srcs"]:
-                    raise ValueError(
-                        f"No build recipe for PREBUILD_MODULES entry {module!r}"
-                    )
-                build_args["md_name"] = module
-                all_opts_args_build.append(build_args)
-        else:
-            exclude_ops = get_exclude_ops()
-            all_opts_args_build, _ = core.get_args_of_build(
-                "all", exclude=exclude_ops, build_targets=explicit_targets
-            )
+        exclude_ops = get_exclude_ops()
+        all_opts_args_build, _ = core.get_args_of_build(
+            "all", exclude=exclude_ops, build_targets=explicit_targets
+        )
 
         moe_base_args = None
         filtered_opts_args_build = []
@@ -369,7 +353,7 @@ if PREBUILD_KERNELS != 0:
                     }
                 )
 
-        if PREBUILD_KERNELS == 1 and ENABLE_CK and not PREBUILD_MODULES:
+        if PREBUILD_KERNELS == 1 and ENABLE_CK:
             extra_args_build = []
 
             req_md_names = [
@@ -449,7 +433,7 @@ if PREBUILD_KERNELS != 0:
         )
 
         # --- FlyDSL AOT pre-compilation (MOE + GEMM, before CK) ---
-        if not IS_WINDOWS and not PREBUILD_MODULES:
+        if not IS_WINDOWS:
             _prev_aot_import = os.environ.get("AITER_AOT_IMPORT")
             os.environ["AITER_AOT_IMPORT"] = "1"
             try:

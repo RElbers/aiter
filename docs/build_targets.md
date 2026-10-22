@@ -18,22 +18,18 @@ HIP_VISIBLE_DEVICES='' ROCR_VISIBLE_DEVICES='' \
 # Use the existing full package prebuild selection, including FlyDSL AOT.
 PREBUILD_KERNELS=1 AITER_BUILD_TARGETS='gfx942:304;gfx950:128;gfx950:256' \
   python setup.py bdist_wheel
-
-# Or prebuild selected native modules only.
-PREBUILD_KERNELS=1 PREBUILD_MODULES='module_gemm_a8w8;module_deepgemm_opus' \
-  AITER_BUILD_TARGETS='gfx942:304;gfx950:128' python setup.py bdist_wheel
 ```
 
-Module names come from `aiter/jit/optCompilerConfig.json`. `PREBUILD_MODULES`
-replaces the usual native module selection and skips package-wide FlyDSL AOT.
-Without it, the existing `PREBUILD_KERNELS` selection and exclusions apply.
+Module names for the standalone prebuild CLI come from
+`aiter/jit/optCompilerConfig.json`. Package builds use the existing
+`PREBUILD_KERNELS` selection and exclusions.
 Live-GPU pretuning must run separately from explicit cross-builds. Keep
 `AITER_JIT_DIR` unset for a wheel so native modules land in its normal package
 location; standalone prebuilds can use it to select their output directory.
 
 The CK Tile preshuffled GEMM tuning module can also be cross-built through
-`aiter/jit/prebuild.py` or `PREBUILD_MODULES`. Its candidate tables retain each
-architecture's kernel IDs, and execution selects the table for the current GPU.
+`aiter/jit/prebuild.py`. Its candidate tables retain each architecture's kernel
+IDs, and execution selects the table for the current GPU.
 Several CU variants of one architecture share the same candidate table.
 
 ## Input and compatibility
