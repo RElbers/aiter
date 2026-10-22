@@ -167,13 +167,20 @@ default_kernels_cktile_dict = {
 # fmt: on
 
 
-arch = get_gfx()
 _expanded_942 = expand_blockpercu(kernels_list_942)
 _expanded_95x = expand_blockpercu(kernels_list_95x)
-if arch.startswith("gfx95"):
-    candidate_kernels_cktile_dict = _expanded_95x
-else:
-    candidate_kernels_cktile_dict = _expanded_942
+
+
+def get_kernel_registry(arch=None):
+    arch = get_gfx() if arch is None else arch
+    return _expanded_95x if arch.startswith("gfx95") else _expanded_942
+
+
+def __getattr__(name):
+    if name == "candidate_kernels_cktile_dict":
+        return get_kernel_registry()
+    raise AttributeError(name)
+
 
 # Name-based reverse lookup for get_tune_dict()
 # Must include kernels from ALL arches, not just the current get_gfx() arch.
