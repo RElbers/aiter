@@ -1200,7 +1200,8 @@ with open(os.path.join(args.output_dir, "generated.cpp"), "w") as output:
             ),
             "aiter.jit.utils.jit_cache": jit_cache,
             "aiter.jit.utils.chip_info": types.SimpleNamespace(
-                get_gfx_runtime=lambda: "gfx942"
+                get_gfx_list=lambda: ["gfx942"],
+                get_gfx_runtime=lambda: "gfx942",
             ),
             "opus_gemm_common": types.SimpleNamespace(
                 default_compiled_kids_for_arch=lambda _arches: {1}
@@ -1307,14 +1308,14 @@ with open(os.path.join(args.output_dir, "generated.cpp"), "w") as output:
     def test_tuner_runtime_probe_fallback_respects_explicit_build_arches(self):
         self.build(7)
         tuner, calls = self.load_tuner()
-        self.tuner_imports["aiter.jit.utils.chip_info"].get_gfx_runtime = mock.Mock(
-            side_effect=RuntimeError("no rocminfo")
-        )
+        chip_info = self.tuner_imports["aiter.jit.utils.chip_info"]
+        chip_info.get_gfx_runtime = mock.Mock(side_effect=RuntimeError("no rocminfo"))
+        chip_info.get_gfx_list = mock.Mock(return_value=["gfx942"])
         defaults = mock.Mock(
             side_effect=lambda arches: {1} if arches == {"gfx942"} else {1, 200}
         )
         self.tuner_imports["opus_gemm_common"].default_compiled_kids_for_arch = defaults
-        with mock.patch.dict(os.environ, {"GPU_ARCHS": "gfx942"}):
+        with mock.patch.dict(os.environ, {}, clear=True):
             self.assertFalse(tuner({7}))
         defaults.assert_called_once_with({"gfx942"})
         self.assertEqual(calls, [])
@@ -1717,11 +1718,11 @@ class TestOpusRequestedKids(unittest.TestCase):
                         str(generator),
                         "--working_path",
                         tmp,
+                        f"--archs={arch}",
                         "--extra_kids",
                         *map(str, kids),
                         *extra_args,
                     ],
-                    env={**os.environ, "GPU_ARCHS": arch},
                     capture_output=True,
                     text=True,
                     check=False,

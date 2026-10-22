@@ -6,6 +6,8 @@
 import contextlib
 import os
 import sys
+import tempfile
+from pathlib import Path
 from unittest import TestCase, mock
 
 # Ensure the repo-local aiter is imported, not any system/site-packages install.
@@ -33,6 +35,23 @@ def test_runtime_arch_resolution():
             assert (
                 resolved_gfx == expected_gfx
             ), f"{gpu_target_string}, live {live_gfx}: got {resolved_gfx}"
+
+
+def test_opus_flags_follow_target_membership():
+    from aiter.jit import core
+
+    required_flags = {
+        "-mllvm -amdgpu-expert-scheduling-mode",
+        "-mllvm -enable-post-misched=1",
+    }
+    for gpu_target_string in ("gfx1250:256;gfx950:256", "gfx950:256;gfx1250:256"):
+        with (
+            _target_env(AITER_BUILD_TARGETS=gpu_target_string),
+            _cleared_cache(core.get_gfx_list),
+        ):
+            args = core.get_args_of_build("module_deepgemm_opus")
+
+        assert required_flags <= set(args["flags_extra_hip"]), gpu_target_string
 
 
 def test_gpu_archs_takes_the_live_cu_count():
@@ -358,6 +377,50 @@ def test_flydsl_aot_runs_every_kind_through_target_selection():
         assert common._collect_aot_jobs_for(kind, {"gfx908"}) == [], kind
 
 
+def test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch():
+    import json
+    import subprocess
+
+    import pandas as pd
+
+    # A GPU-free build cannot know which CU counts of an arch it serves, and
+    # opus fails a launch whose tuned kid is missing, so no row may be dropped.
+    tuned = pd.read_csv(
+        Path(_REPO_ROOT, "aiter/configs/model_configs/dsv4_bf16_tuned_gemm.csv")
+    )
+    rows = tuned[(tuned["libtype"] == "opus") & (tuned["gfx"] == "gfx942")]
+    assert (rows["cu_num"] != 304).any(), "fixture lost its non-default CU rows"
+    row_kids = {int(kid) for kid in rows["solidx"]}
+
+    with tempfile.TemporaryDirectory() as work_dir:
+        csv_path = Path(work_dir, "tuned.csv")
+        rows.to_csv(csv_path, index=False)
+        compiled = {}
+        for gpu_archs in ("gfx942", "gfx950"):
+            out_dir = Path(work_dir, gpu_archs)
+            out_dir.mkdir()
+            subprocess.run(
+                [
+                    sys.executable,
+                    Path(_REPO_ROOT, "csrc/opus_gemm/gen_instances.py"),
+                    "--working_path",
+                    out_dir,
+                    f"--archs={gpu_archs}",
+                    "--tune_files",
+                    csv_path,
+                ],
+                check=True,
+                capture_output=True,
+                cwd=work_dir,
+            )
+            compiled[gpu_archs] = set(
+                json.loads(Path(out_dir, "compiled_kids.json").read_text())
+            )
+
+    assert row_kids <= compiled["gfx942"], sorted(row_kids - compiled["gfx942"])
+    assert not row_kids & compiled["gfx950"], sorted(row_kids & compiled["gfx950"])
+
+
 @contextlib.contextmanager
 def _target_env(**values):
     with mock.patch.dict(os.environ):
@@ -382,9 +445,11 @@ if __name__ == "__main__":
     test_target_resolution_warnings()
     test_native_resolution_depends_on_the_caller()
     test_runtime_arch_resolution()
+    test_opus_flags_follow_target_membership()
     test_gpu_archs_takes_the_live_cu_count()
     test_unparseable_gpu_archs_defers_to_build_targets()
     test_gpu_archs_parses_the_same_everywhere()
     test_flydsl_aot_reads_arch_only_in_the_clis()
     test_flydsl_aot_runs_every_kind_through_target_selection()
+    test_opus_codegen_keeps_kids_for_every_cu_count_of_a_target_arch()
     print("ALL_PASS")
