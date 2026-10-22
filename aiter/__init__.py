@@ -116,6 +116,8 @@ else:
     # (mla.py among others) gets pulled in, otherwise that resolves against a
     # partially initialised aiter and raises ImportError.
     from .jit import core as core
+
+    core.get_gfx_list()
     from .utility import dtypes as dtypes
     from .ops.enum import *
     from .ops.norm import *
