@@ -24,7 +24,12 @@ import torch
 
 import aiter
 from aiter import dtypes
-from aiter.bench import BenchResult, MeasureConfig, run_bench
+from aiter.bench import (
+    BenchmarkConfig,
+    BenchmarkResult,
+    TimingResult,
+    run_bench,
+)
 from aiter.jit.utils.chip_info import get_gfx
 from aiter.ops.flydsl import flydsl_hgemm
 from aiter.test_common import (
@@ -43,7 +48,7 @@ SEED = 0
 TOL_ERR_RATIO = 0.05
 # Graph replay is the PR-verdict number in aiter/bench and complements
 # run_perftest's device-time mean. Warm cache matches graph-based serving.
-BENCH_MEASURE = MeasureConfig(mode="graph", cache="warm")
+BENCH_CONFIG = BenchmarkConfig(mode="graph", cache="warm")
 
 # (m, n, k, block_m, block_n, block_k, stages, split_k, m_waves, n_waves, k_waves,
 #  group_m, hti)
@@ -150,15 +155,13 @@ def run_torch_mm(a, b, out, *_tile, **_launch):
     return out
 
 
-def run_perftest_bench(fn, *args, name=None, flops=None, nbytes=None, **kwargs):
-    """``run_perftest`` with the ``run_bench`` contract: ``(data, BenchResult)``."""
-    data, us = run_perftest(fn, *args, **kwargs)
-    result = BenchResult(
+def run_perftest_bench(fn, *, args=(), kwargs=None, name=None, flops=None, nbytes=None):
+    """``run_perftest`` with the ``run_bench`` contract: ``(data, BenchmarkResult)``."""
+    data, us = run_perftest(fn, *args, **(kwargs or {}))
+    result = BenchmarkResult(
         name=name or getattr(fn, "__name__", None),
         backend="run_perftest",
-        metric="mean",
-        us=us,
-        mean_us=us,
+        timing=TimingResult(statistic="mean", selected_us=us, mean_us=us),
         flops=flops,
         nbytes=nbytes,
         tflops=flops / us / 1e6 if flops else None,
@@ -171,14 +174,14 @@ def run_candidates(candidates, _make_inputs, runners, *, reference, check):
     """Benchmark and verify every candidate with every runner on fresh inputs.
 
     Each runner follows the ``run_bench`` contract:
-    ``runner(fn, *inputs, name=name)`` returns ``(data, BenchResult)``, where
+    ``runner(fn, args=inputs, name=name)`` returns ``(data, BenchmarkResult)``, where
     ``data`` is the output of an untimed call on ``inputs``. ``data`` is
     verified with ``check(name, ref, data) -> (passed, err)`` against
     ``ref = reference(*inputs)``, computed once from the first generated
-    inputs, and the verdict is recorded on the ``BenchResult``.
+    inputs, and the verdict is recorded on the ``BenchmarkResult``.
 
     Returns ``(columns, results)``: table columns named
-    ``"{name} {runner_name} {column}"``, and ``{(name, runner_name): BenchResult}``.
+    ``"{name} {runner_name} {column}"``, and ``{(name, runner_name): BenchmarkResult}``.
     """
     ref = None
     columns = {}
@@ -188,12 +191,12 @@ def run_candidates(candidates, _make_inputs, runners, *, reference, check):
             inputs = _make_inputs()
             if ref is None:
                 ref = reference(*inputs)
-            data, result = runner(fn, *inputs, name=name)
+            data, result = runner(fn, args=inputs, name=name)
             passed, result.err = check(name, ref, data)
             result.verified = "pass" if passed else "fail"
             results[(name, runner_name)] = result
             prefix = f"{name} {runner_name}"
-            columns[f"{prefix} us"] = result.us
+            columns[f"{prefix} us"] = result.timing.selected_us
             columns[f"{prefix} TFLOPS"] = result.tflops
             columns[f"{prefix} TB/s"] = (
                 result.gb_s / 1e3 if result.gb_s is not None else None
@@ -253,15 +256,14 @@ def test_hgemm(m, n, k, dtype, policy, split_k):
     runners = {
         "perftest": functools.partial(run_perftest_bench, flops=flops, nbytes=nbytes),
         "bench": functools.partial(
-            run_bench, measure=BENCH_MEASURE, flops=flops, nbytes=nbytes
+            run_bench, config=BENCH_CONFIG, flops=flops, nbytes=nbytes
         ),
     }
 
     ret = {
         "gfx": get_gfx(),
         "tile": (
-            f"{tile['block_m']}x{tile['block_n']}x{tile['block_k']}"
-            f"s{tile['stages']}"
+            f"{tile['block_m']}x{tile['block_n']}x{tile['block_k']}s{tile['stages']}"
         ),
         "waves": f"{tile['m_waves']}x{tile['n_waves']}x{tile['k_waves']}",
     }

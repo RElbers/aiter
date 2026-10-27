@@ -7,6 +7,7 @@ activity come from the amdsmi Python binding when it imports, otherwise from
 the ``amd-smi`` CLI; when neither works the snapshot carries the reason.
 """
 
+import contextlib
 import functools
 import importlib.metadata
 import json
@@ -14,7 +15,9 @@ import os
 import platform
 import shutil
 import subprocess
+from collections.abc import Generator
 from dataclasses import asdict, dataclass
+from typing import Any
 
 import torch
 
@@ -39,18 +42,18 @@ class SystemInfo:
     aiter_git_sha: str | None
     hostname: str
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def _package_version(name):
+def _package_version(name: str) -> str | None:
     try:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return None
 
 
-def _git_sha():
+def _git_sha() -> str | None:
     try:
         out = subprocess.run(
             ["git", "-C", _REPO_ROOT, "rev-parse", "--short", "HEAD"],
@@ -61,6 +64,7 @@ def _git_sha():
         )
     except (OSError, subprocess.SubprocessError):
         return None
+
     sha = out.stdout.strip()
     dirty = subprocess.run(
         ["git", "-C", _REPO_ROOT, "status", "--porcelain", "--untracked-files=no"],
@@ -72,7 +76,7 @@ def _git_sha():
     return f"{sha}-dirty" if dirty else sha
 
 
-def pci_bdf(device_index) -> str:
+def pci_bdf(device_index: int) -> str:
     props = torch.cuda.get_device_properties(device_index)
     return (
         f"{props.pci_domain_id:04x}:{props.pci_bus_id:02x}:{props.pci_device_id:02x}.0"
@@ -80,7 +84,7 @@ def pci_bdf(device_index) -> str:
 
 
 @functools.cache
-def system_info(device_index) -> SystemInfo:
+def system_info(device_index: int) -> SystemInfo:
     props = torch.cuda.get_device_properties(device_index)
     return SystemInfo(
         gpu_name=props.name,
@@ -98,16 +102,11 @@ def system_info(device_index) -> SystemInfo:
     )
 
 
-# --------------------------------------------------------------------------- #
-# GPU state snapshot: clocks, performance level, activity, power, temperature.
-# --------------------------------------------------------------------------- #
-
-
-def _value(entry):
+def _value(entry: Any) -> Any:
     return entry.get("value") if isinstance(entry, dict) else None
 
 
-def _run_smi(*args):
+def _run_smi(*args: str) -> Any:
     out = subprocess.run(
         ["amd-smi", *args, "--json"],
         capture_output=True,
@@ -119,14 +118,15 @@ def _run_smi(*args):
 
 
 @functools.cache
-def _smi_index(bdf):
+def _smi_index(bdf: str) -> int:
     for gpu in _run_smi("list"):
         if gpu.get("bdf", "").lower() == bdf.lower():
             return gpu["gpu"]
+
     raise LookupError(f"amd-smi lists no GPU with BDF {bdf}")
 
 
-def _snapshot_cli(device_index):
+def _snapshot_cli(device_index: int) -> dict[str, Any]:
     idx = _smi_index(pci_bdf(device_index))
     data = _run_smi(
         "metric",
@@ -138,6 +138,7 @@ def _snapshot_cli(device_index):
         "--power",
         "--temperature",
     )["gpu_data"][0]
+
     clocks = data.get("clock", {})
     gfx = [
         _value(v.get("clk"))
@@ -150,6 +151,7 @@ def _snapshot_cli(device_index):
         for k, v in clocks.items()
         if k.startswith("gfx_") and isinstance(v, dict)
     }
+
     usage = data.get("usage", {})
     return {
         "source": "amd-smi",
@@ -164,26 +166,30 @@ def _snapshot_cli(device_index):
     }
 
 
-def _snapshot_binding(device_index):
+def _snapshot_binding(device_index: int) -> dict[str, Any]:
     from aiter import smi_monitor
 
     handle = smi_monitor.hip_device_to_amdsmi_handle(device_index)
     sample = smi_monitor._collect_sample(handle)
     sample.pop("timestamp_s", None)
+
     try:
         sample["perf_level"] = str(smi_monitor.amdsmi.amdsmi_get_gpu_perf_level(handle))
     except Exception:  # noqa: BLE001 - optional field
         sample["perf_level"] = None
+
     return {"source": "amdsmi", **sample}
 
 
-def gpu_state(device_index) -> dict:
+def gpu_state(device_index: int) -> dict[str, Any]:
     """One read-only snapshot of the GPU's clocks and activity."""
-    errors = []
+    errors: list[str] = []
+
     try:
         return _snapshot_binding(device_index)
     except Exception as error:  # noqa: BLE001 - fall back to the CLI
         errors.append(f"amdsmi: {error}")
+
     if shutil.which("amd-smi"):
         try:
             return _snapshot_cli(device_index)
@@ -191,4 +197,46 @@ def gpu_state(device_index) -> dict:
             errors.append(f"amd-smi: {error}")
     else:
         errors.append("amd-smi: not on PATH")
+
     return {"source": None, "error": "; ".join(errors)}
+
+
+@dataclass
+class TelemetryWindow:
+    summary: dict[str, Any] | None = None
+    error: str | None = None
+
+
+@contextlib.contextmanager
+def telemetry_window(
+    device_index: int,
+    enabled: bool,
+    interval_s: float = 0.01,
+) -> Generator[TelemetryWindow, None, None]:
+    """Poll GpuMonitor while the body runs; ``window.summary`` afterwards.
+
+    When the amdsmi binding is unavailable, ``window.error`` says why and the
+    body still runs. Windows shorter than ``interval_s`` yield no samples.
+    """
+    window = TelemetryWindow()
+    if not enabled:
+        yield window
+        return
+
+    try:
+        from aiter.smi_monitor import GpuMonitor
+
+        monitor = GpuMonitor(device_index=device_index, interval_s=interval_s)
+        monitor.start()
+    except Exception as error:  # noqa: BLE001 - reported in the result
+        window.error = f"telemetry unavailable: {error}"
+        yield window
+        return
+
+    try:
+        yield window
+    finally:
+        monitor.stop()
+        window.summary = monitor.summary()
+        if not window.summary:
+            window.error = "telemetry window too short: no samples"

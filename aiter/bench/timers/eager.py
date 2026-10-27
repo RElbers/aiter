@@ -9,24 +9,38 @@ amortized the way a steady non-graph serving loop amortizes it. With
 contains the host launch round trip.
 """
 
+from collections.abc import Callable, Sequence
+from typing import Any
+
 import torch
 
-from . import TimerOutput
+from .result import EagerDetails, TimerOutput
 
 
-def time_eager(calls, iters, *, before_call=None, sync_each=False) -> TimerOutput:
-    starts = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
-    ends = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
+def time_eager(
+    bound_calls: Sequence[Callable[[], Any]],
+    sample_count: int,
+    *,
+    before_call: Callable[[], None] | None = None,
+    sync_each: bool = False,
+) -> TimerOutput:
+    starts = [torch.cuda.Event(enable_timing=True) for _ in range(sample_count)]
+    ends = [torch.cuda.Event(enable_timing=True) for _ in range(sample_count)]
+
     torch.cuda.synchronize()
-    for i in range(iters):
+    for i in range(sample_count):
         if before_call is not None:
             # Issued before the start event, so it is never inside a sample.
             before_call()
+
         starts[i].record()
-        calls[i % len(calls)]()
+        bound_calls[i % len(bound_calls)]()
         ends[i].record()
+
         if sync_each:
             torch.cuda.synchronize()
+
     torch.cuda.synchronize()
-    samples = [s.elapsed_time(e) * 1000.0 for s, e in zip(starts, ends)]
-    return TimerOutput(samples_us=samples, info={"eager_sync_each": sync_each})
+    samples_us = [start.elapsed_time(end) * 1000.0 for start, end in zip(starts, ends)]
+    details = EagerDetails(sync_each=sync_each)
+    return TimerOutput(samples_us=samples_us, details=details)

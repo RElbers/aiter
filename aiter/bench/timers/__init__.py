@@ -2,16 +2,11 @@
 # Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
 """Timing strategies.
 
-Every timer takes ``calls`` -- zero-argument callables, one per input copy;
-timed call ``i`` runs ``calls[i % len(calls)]`` -- plus an optional
-``before_call`` hook (the cache flush), and returns a ``TimerOutput``.
+Every timer takes ``bound_calls`` -- zero-argument callables, one per input
+copy; timed call ``i`` runs ``bound_calls[i % len(bound_calls)]`` -- plus an
+optional ``before_call`` hook (the cache flush), and returns a ``TimerOutput``.
 """
 
-from dataclasses import dataclass, field
+from .result import DeviceDetails, EagerDetails, GraphDetails, TimerOutput
 
-
-@dataclass
-class TimerOutput:
-    samples_us: list
-    info: dict = field(default_factory=dict)  # mode-specific BenchResult fields
-    notes: list = field(default_factory=list)
+__all__ = ["DeviceDetails", "EagerDetails", "GraphDetails", "TimerOutput"]
