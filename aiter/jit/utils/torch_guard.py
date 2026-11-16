@@ -3,7 +3,7 @@
 import importlib
 import types
 from collections.abc import Callable
-from typing import Any, Union, get_args, get_origin
+from typing import Any, ParamSpec, TypeVar, Union, get_args, get_origin
 
 from packaging import version
 from packaging.version import Version
@@ -228,12 +228,16 @@ def generate_schema(func, mutates_args: list[str] | str = "unknown") -> str:
     return schema
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
 def torch_compile_guard(
     mutates_args: list[str] | str = "unknown",
     device: str = "cpu",
     calling_func_: Callable[..., Any] | None = None,
     gen_fake: Callable[..., Any] | None = None,
-):
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     def decorator(func):
         # In core.py, we calling wrapper, but actually we need use aiter.op func
         calling_func = calling_func_ if calling_func_ is not None else func

@@ -30,7 +30,9 @@ else
         mapfile -t files < <(
             {
                 find op_tests -maxdepth 1 -type f -name "test_*.py"
+                find op_tests/catalog -type f -name "test_*.py"
                 find tests -maxdepth 1 -type f -name "test_*.py"
+                find tests/catalog -type f -name "test_*.py"
             } | LC_ALL=C sort
         )
     else
@@ -106,7 +108,12 @@ for file in "${sharded_files[@]}"; do
             # kernel configuration. Dedicated runs can retain 100 iterations.
             test_cmd=(timeout 60m env "AITER_GEMM_TEST_ITERS=${AITER_GEMM_TEST_ITERS:-1}" python3 "$file")
             ;;
-        tests/test_*.py)
+        op_tests/catalog/test_*.py)
+            # Catalog operation tests have no script entry point; running the
+            # file directly would only import it.
+            test_cmd=(timeout 60m python3 -m pytest -q -rs "$file")
+            ;;
+        tests/test_*.py|tests/catalog/*)
             # The focused regression suite is pytest-style with no runnable
             # __main__, so `python3 "$file"` would exit 0 without executing a
             # case. Dispatch it through pytest, which exits non-zero (5) when
